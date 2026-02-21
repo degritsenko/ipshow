@@ -1,3 +1,14 @@
-https://gritsenko.me, http://gritsenko.me {
+http://gritsenko.me {
+    @browser header_regexp User-Agent (?i)(mozilla|chrome|safari|firefox|edg)
+    handle @browser {
+        redir https://{host}{uri} 308
+    }
+
+    handle {
+        reverse_proxy ipshow:8080
+    }
+}
+
+https://gritsenko.me {
     reverse_proxy ipshow:8080
 }
