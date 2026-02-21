@@ -1,9 +1,9 @@
 # ipshow
 
-Simple service that returns your public IP address, keeps visit stats, and shows country info in web view.
+Simple service that returns your public IP address, keeps visit stats, and shows country/city info in web view.
 
 ## Endpoints
-- `/` - web page with IP and country
+- `/` - web page with IP, country, and city
 - `/stats` - plain text stats by IP
 
 CLI tools (`curl`, `wget`, `httpie`) get raw IP only.
