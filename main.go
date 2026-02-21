@@ -83,6 +83,17 @@ func showStats(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if err := db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte("IPStats"))
+		total := uint64(0)
+
+		if err := b.ForEach(func(_, v []byte) error {
+			total += btoi(v)
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		fmt.Fprintf(w, "Total requests: %d\n", total)
+
 		return b.ForEach(func(k, v []byte) error {
 			ip := string(k)
 			country, code, city := geo.Lookup(ip)
