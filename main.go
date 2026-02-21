@@ -68,7 +68,7 @@ func main() {
 
 		if isCLI {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			fmt.Fprintf(w, "%s\n%s (%s)\n", ip, fallback(country, "unknown"), fallback(code, "--"))
+			fmt.Fprintf(w, "%s\n", ip)
 		} else {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			fmt.Fprintf(w, htmlTemplate, ip, fallback(country, "unknown"), fallback(code, "--"))

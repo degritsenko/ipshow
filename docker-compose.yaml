@@ -1,12 +1,14 @@
 services:
   ipshow:
     build: .
+    container_name: ipshow
     volumes:
       - ./data:/app/data
     restart: always
 
   caddy:
     image: caddy:latest
+    container_name: ipshow-caddy
     ports:
       - "80:80"
       - "443:443"
