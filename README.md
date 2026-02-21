@@ -14,6 +14,7 @@ docker compose up -d --build
 ```
 
 Before start, set your own domain in Caddyfile.
+HTTP behavior in Caddyfile: browsers are redirected from `80` to `443`, CLI requests are served on `80` without redirect.
 
 Containers:
 - `ipshow`
