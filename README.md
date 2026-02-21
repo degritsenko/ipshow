@@ -13,6 +13,8 @@ CLI tools (`curl`, `wget`, `httpie`) get raw IP only.
 docker compose up -d --build
 ```
 
+Before start, set your own domain in `/Users/gritsenko/Documents/New project/ipshow-push/Caddyfile`.
+
 Containers:
 - `ipshow`
 - `ipshow-caddy`
