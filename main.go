@@ -48,7 +48,7 @@ func main() {
 		}
 
 		ip := clientIP(r)
-		country, code := geo.Lookup(ip)
+		country, code, city := geo.Lookup(ip)
 
 		if err := db.Update(func(tx *bbolt.Tx) error {
 			b := tx.Bucket([]byte("IPStats"))
@@ -71,7 +71,7 @@ func main() {
 			fmt.Fprintf(w, "%s\n", ip)
 		} else {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprintf(w, htmlTemplate, ip, fallback(country, "unknown"), fallback(code, "--"))
+			fmt.Fprintf(w, htmlTemplate, ip, fallback(country, "unknown"), fallback(code, "--"), fallback(city, "unknown"))
 		}
 	})
 
@@ -85,8 +85,8 @@ func showStats(w http.ResponseWriter) {
 		b := tx.Bucket([]byte("IPStats"))
 		return b.ForEach(func(k, v []byte) error {
 			ip := string(k)
-			country, code := geo.Lookup(ip)
-			fmt.Fprintf(w, "IP: %s | Country: %s (%s) | Count: %d\n", ip, fallback(country, "unknown"), fallback(code, "--"), btoi(v))
+			country, code, city := geo.Lookup(ip)
+			fmt.Fprintf(w, "IP: %s | Country: %s (%s) | City: %s | Count: %d\n", ip, fallback(country, "unknown"), fallback(code, "--"), fallback(city, "unknown"), btoi(v))
 			return nil
 		})
 	}); err != nil {
@@ -105,6 +105,7 @@ type geoService struct {
 type geoCache struct {
 	country string
 	code    string
+	city    string
 	exp     time.Time
 }
 
@@ -112,6 +113,7 @@ type ipWhoIsResponse struct {
 	Success     bool   `json:"success"`
 	Country     string `json:"country"`
 	CountryCode string `json:"country_code"`
+	City        string `json:"city"`
 }
 
 func newGeoService() *geoService {
@@ -122,18 +124,18 @@ func newGeoService() *geoService {
 	}
 }
 
-func (g *geoService) Lookup(ip string) (string, string) {
+func (g *geoService) Lookup(ip string) (string, string, string) {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
-		return "", ""
+		return "", "", ""
 	}
 
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	if addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() {
-		return "Local/Private", "LAN"
+		return "Local/Private", "LAN", "Local/Private"
 	}
 
 	now := time.Now()
@@ -141,37 +143,39 @@ func (g *geoService) Lookup(ip string) (string, string) {
 	item, ok := g.cache[ip]
 	g.mu.RUnlock()
 	if ok && now.Before(item.exp) {
-		return item.country, item.code
+		return item.country, item.code, item.city
 	}
 
 	req, err := http.NewRequest(http.MethodGet, "https://ipwho.is/"+ip, nil)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", ""
+		return "", "", ""
 	}
 
 	var parsed ipWhoIsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil || !parsed.Success {
-		return "", ""
+		return "", "", ""
 	}
 
 	parsed.Country = strings.TrimSpace(parsed.Country)
 	parsed.CountryCode = strings.TrimSpace(parsed.CountryCode)
+	parsed.City = strings.TrimSpace(parsed.City)
 	g.mu.Lock()
 	g.cache[ip] = geoCache{
 		country: parsed.Country,
 		code:    parsed.CountryCode,
+		city:    parsed.City,
 		exp:     now.Add(g.ttl),
 	}
 	g.mu.Unlock()
-	return parsed.Country, parsed.CountryCode
+	return parsed.Country, parsed.CountryCode, parsed.City
 }
 
 func clientIP(r *http.Request) string {
@@ -229,6 +233,7 @@ const htmlTemplate = `
         h1 {font-weight: normal; font-size: 1.1rem; color: #888; margin-bottom: 5px;}
         .ip {font-size: clamp(1.5rem, 8vw, 2.5rem); font-weight: bold; color: #222; margin-bottom: 10px;}
         .country {font-size: 1.1rem; color: #666;}
+        .city {font-size: 1rem; color: #777; margin-top: 4px;}
     </style>
 </head>
 <body>
@@ -236,6 +241,7 @@ const htmlTemplate = `
         <h1>Your IP address</h1>
         <div class="ip">%s</div>
         <div class="country">%s (%s)</div>
+        <div class="city">City: %s</div>
     </div>
 </body>
 </html>`
