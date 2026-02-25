@@ -107,10 +107,11 @@ func showStats(w http.ResponseWriter) {
 }
 
 type geoService struct {
-	client *http.Client
-	mu     sync.RWMutex
-	cache  map[string]geoCache
-	ttl    time.Duration
+	client  *http.Client
+	mu      sync.RWMutex
+	cache   map[string]geoCache
+	ttl     time.Duration
+	failTTL time.Duration
 }
 
 type geoCache struct {
@@ -127,11 +128,18 @@ type ipWhoIsResponse struct {
 	City        string `json:"city"`
 }
 
+type ipAPIResponse struct {
+	CountryName string `json:"country_name"`
+	CountryCode string `json:"country"`
+	City        string `json:"city"`
+}
+
 func newGeoService() *geoService {
 	return &geoService{
-		client: &http.Client{Timeout: 2 * time.Second},
-		cache:  make(map[string]geoCache),
-		ttl:    24 * time.Hour,
+		client:  &http.Client{Timeout: 2 * time.Second},
+		cache:   make(map[string]geoCache),
+		ttl:     24 * time.Hour,
+		failTTL: 15 * time.Minute,
 	}
 }
 
@@ -157,6 +165,38 @@ func (g *geoService) Lookup(ip string) (string, string, string) {
 		return item.country, item.code, item.city
 	}
 
+	country, code, city := g.lookupIPWhoIs(ip)
+	if strings.TrimSpace(country) == "" {
+		country, code, city = g.lookupIPAPI(ip)
+	}
+
+	country = strings.TrimSpace(country)
+	code = strings.TrimSpace(code)
+	city = strings.TrimSpace(city)
+	if country == "" {
+		g.mu.Lock()
+		g.cache[ip] = geoCache{
+			country: "",
+			code:    "",
+			city:    "",
+			exp:     now.Add(g.failTTL),
+		}
+		g.mu.Unlock()
+		return "", "", ""
+	}
+
+	g.mu.Lock()
+	g.cache[ip] = geoCache{
+		country: country,
+		code:    code,
+		city:    city,
+		exp:     now.Add(g.ttl),
+	}
+	g.mu.Unlock()
+	return country, code, city
+}
+
+func (g *geoService) lookupIPWhoIs(ip string) (string, string, string) {
 	req, err := http.NewRequest(http.MethodGet, "https://ipwho.is/"+ip, nil)
 	if err != nil {
 		return "", "", ""
@@ -174,19 +214,28 @@ func (g *geoService) Lookup(ip string) (string, string, string) {
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil || !parsed.Success {
 		return "", "", ""
 	}
-
-	parsed.Country = strings.TrimSpace(parsed.Country)
-	parsed.CountryCode = strings.TrimSpace(parsed.CountryCode)
-	parsed.City = strings.TrimSpace(parsed.City)
-	g.mu.Lock()
-	g.cache[ip] = geoCache{
-		country: parsed.Country,
-		code:    parsed.CountryCode,
-		city:    parsed.City,
-		exp:     now.Add(g.ttl),
-	}
-	g.mu.Unlock()
 	return parsed.Country, parsed.CountryCode, parsed.City
+}
+
+func (g *geoService) lookupIPAPI(ip string) (string, string, string) {
+	req, err := http.NewRequest(http.MethodGet, "https://ipapi.co/"+ip+"/json/", nil)
+	if err != nil {
+		return "", "", ""
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return "", "", ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", ""
+	}
+
+	var parsed ipAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", "", ""
+	}
+	return parsed.CountryName, parsed.CountryCode, parsed.City
 }
 
 func clientIP(r *http.Request) string {
