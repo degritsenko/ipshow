@@ -3,7 +3,7 @@ services:
     build: .
     container_name: ipshow
     volumes:
-      - ./data:/app/data
+      - ./data:/root/data
     restart: always
 
   caddy:

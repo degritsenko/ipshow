@@ -13,6 +13,8 @@ CLI tools (`curl`, `wget`, `httpie`) get raw IP only.
 docker compose up -d --build
 ```
 
+Stats database is stored in `./data/stats.db` on the host and persists across `docker compose down`.
+
 Before start, set your own domain in Caddyfile.
 HTTP behavior in Caddyfile: browsers are redirected from `80` to `443`, CLI requests are served on `80` without redirect.
 
