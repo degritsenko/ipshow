@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"go.etcd.io/bbolt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +36,35 @@ func btoi(v []byte) uint64 {
 	return binary.BigEndian.Uint64(v)
 }
 
+type ipStatLine struct {
+	ip    string
+	count uint64
+}
+
+type statsItem struct {
+	IP          string `json:"ip"`
+	Country     string `json:"country"`
+	CountryCode string `json:"country_code"`
+	City        string `json:"city"`
+	Count       uint64 `json:"count"`
+}
+
+type statsSummaryResponse struct {
+	TotalRequests uint64 `json:"total_requests"`
+	UniqueIPs     int    `json:"unique_ips"`
+	GeneratedAt   string `json:"generated_at"`
+}
+
+type statsPageResponse struct {
+	Page          int         `json:"page"`
+	PageSize      int         `json:"page_size"`
+	TotalItems    int         `json:"total_items"`
+	TotalPages    int         `json:"total_pages"`
+	TotalRequests uint64      `json:"total_requests"`
+	Sort          string      `json:"sort"`
+	Items         []statsItem `json:"items"`
+}
+
 func main() {
 	var err error
 	db, err = bbolt.Open("data/stats.db", 0600, nil)
@@ -53,7 +85,15 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/stats" {
-			showStats(w)
+			showStatsText(w, r)
+			return
+		}
+		if r.URL.Path == "/api/stats" {
+			showStatsJSON(w, r)
+			return
+		}
+		if r.URL.Path == "/api/stats/summary" {
+			showStatsSummaryJSON(w)
 			return
 		}
 
@@ -88,35 +128,105 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func showStats(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	type ipStatLine struct {
-		ip    string
-		count uint64
+func showStatsSummaryJSON(w http.ResponseWriter) {
+	lines, total, err := loadStatsLines()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		log.Printf("db summary error: %v", err)
+		return
 	}
 
-	lines := make([]ipStatLine, 0, 128)
-	total := uint64(0)
+	resp := statsSummaryResponse{
+		TotalRequests: total,
+		UniqueIPs:     len(lines),
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
 
-	if err := db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(ipStatsBucketName))
-		return b.ForEach(func(k, v []byte) error {
-			count := btoi(v)
-			total += count
-			lines = append(lines, ipStatLine{
-				ip:    string(k),
-				count: count,
-			})
-			return nil
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func showStatsJSON(w http.ResponseWriter, r *http.Request) {
+	page, pageSize := parsePageParams(r)
+	sortBy := parseSortParam(r)
+
+	lines, totalRequests, err := loadStatsLines()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		log.Printf("db stats error: %v", err)
+		return
+	}
+
+	sortStatsLines(lines, sortBy)
+	page, start, end, totalPages := pageWindow(len(lines), page, pageSize)
+
+	items := make([]statsItem, 0, end-start)
+	for _, line := range lines[start:end] {
+		country, code, city := lookupGeoCached(line.ip)
+		items = append(items, statsItem{
+			IP:          line.ip,
+			Country:     fallback(country, "unknown"),
+			CountryCode: fallback(code, "--"),
+			City:        fallback(city, "unknown"),
+			Count:       line.count,
 		})
-	}); err != nil {
+	}
+
+	resp := statsPageResponse{
+		Page:          page,
+		PageSize:      pageSize,
+		TotalItems:    len(lines),
+		TotalPages:    totalPages,
+		TotalRequests: totalRequests,
+		Sort:          sortBy,
+		Items:         items,
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(resp)
+}
+
+func showStatsText(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	page, pageSize := parsePageParams(r)
+	sortBy := parseSortParam(r)
+
+	lines, total, err := loadStatsLines()
+	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		log.Printf("db view error: %v", err)
 		return
 	}
 
+	sortStatsLines(lines, sortBy)
+	page, start, end, totalPages := pageWindow(len(lines), page, pageSize)
+	baseURL := requestBaseURL(r)
+	summaryURL := fmt.Sprintf("%s/api/stats/summary", baseURL)
+	apiURL := fmt.Sprintf("%s/api/stats?page=%d&page_size=%d&sort=%s", baseURL, page, pageSize, sortBy)
+	prevPage := page - 1
+	if prevPage < 1 {
+		prevPage = 1
+	}
+	nextPage := page + 1
+	if nextPage > totalPages {
+		nextPage = totalPages
+	}
+	prevTextURL := fmt.Sprintf("%s/stats?page=%d&page_size=%d&sort=%s", baseURL, prevPage, pageSize, sortBy)
+	nextTextURL := fmt.Sprintf("%s/stats?page=%d&page_size=%d&sort=%s", baseURL, nextPage, pageSize, sortBy)
+	prevAPIURL := fmt.Sprintf("%s/api/stats?page=%d&page_size=%d&sort=%s", baseURL, prevPage, pageSize, sortBy)
+	nextAPIURL := fmt.Sprintf("%s/api/stats?page=%d&page_size=%d&sort=%s", baseURL, nextPage, pageSize, sortBy)
+
 	fmt.Fprintf(w, "Total requests: %d\n", total)
-	for _, line := range lines {
+	fmt.Fprintf(w, "Total IPs: %d | Page: %d/%d | Page size: %d | Sort: %s\n", len(lines), page, totalPages, pageSize, sortBy)
+	fmt.Fprintf(w, "Summary JSON: %s\n", summaryURL)
+	fmt.Fprintf(w, "Current JSON page: %s\n", apiURL)
+	fmt.Fprintf(w, "Prev page (text): %s\n", prevTextURL)
+	fmt.Fprintf(w, "Next page (text): %s\n", nextTextURL)
+	fmt.Fprintf(w, "Prev page (json): %s\n", prevAPIURL)
+	fmt.Fprintf(w, "Next page (json): %s\n", nextAPIURL)
+	for _, line := range lines[start:end] {
 		country, code, city := lookupGeoCached(line.ip)
 		fmt.Fprintf(
 			w,
@@ -128,6 +238,114 @@ func showStats(w http.ResponseWriter) {
 			line.count,
 		)
 	}
+}
+
+func loadStatsLines() ([]ipStatLine, uint64, error) {
+	lines := make([]ipStatLine, 0, 256)
+	total := uint64(0)
+
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(ipStatsBucketName))
+		return b.ForEach(func(k, v []byte) error {
+			count := btoi(v)
+			total += count
+			lines = append(lines, ipStatLine{
+				ip:    string(k),
+				count: count,
+			})
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return lines, total, nil
+}
+
+func parsePageParams(r *http.Request) (int, int) {
+	page := 1
+	pageSize := 200
+
+	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			page = v
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("page_size")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			pageSize = v
+		}
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
+	}
+	return page, pageSize
+}
+
+func parseSortParam(r *http.Request) string {
+	sortBy := strings.TrimSpace(r.URL.Query().Get("sort"))
+	switch sortBy {
+	case "count_asc", "count_desc", "ip_asc", "ip_desc":
+		return sortBy
+	default:
+		return "count_desc"
+	}
+}
+
+func sortStatsLines(lines []ipStatLine, sortBy string) {
+	switch sortBy {
+	case "count_asc":
+		sort.Slice(lines, func(i, j int) bool {
+			if lines[i].count == lines[j].count {
+				return lines[i].ip < lines[j].ip
+			}
+			return lines[i].count < lines[j].count
+		})
+	case "ip_asc":
+		sort.Slice(lines, func(i, j int) bool { return lines[i].ip < lines[j].ip })
+	case "ip_desc":
+		sort.Slice(lines, func(i, j int) bool { return lines[i].ip > lines[j].ip })
+	default:
+		sort.Slice(lines, func(i, j int) bool {
+			if lines[i].count == lines[j].count {
+				return lines[i].ip < lines[j].ip
+			}
+			return lines[i].count > lines[j].count
+		})
+	}
+}
+
+func pageWindow(totalItems, page, pageSize int) (int, int, int, int) {
+	if totalItems == 0 {
+		return 1, 0, 0, 1
+	}
+
+	totalPages := int(math.Ceil(float64(totalItems) / float64(pageSize)))
+	if page > totalPages {
+		page = totalPages
+	}
+
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if end > totalItems {
+		end = totalItems
+	}
+	return page, start, end, totalPages
+}
+
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
+		scheme = proto
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		host = "localhost"
+	}
+	return scheme + "://" + host
 }
 
 type geoService struct {
