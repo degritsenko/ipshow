@@ -17,6 +17,11 @@ import (
 var db *bbolt.DB
 var geo = newGeoService()
 
+const (
+	ipStatsBucketName  = "IPStats"
+	geoCacheBucketName = "GeoCache"
+)
+
 func itob(v uint64) []byte {
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, v)
@@ -35,7 +40,10 @@ func main() {
 	defer db.Close()
 
 	if err := db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte("IPStats"))
+		if _, err := tx.CreateBucketIfNotExists([]byte(ipStatsBucketName)); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists([]byte(geoCacheBucketName))
 		return err
 	}); err != nil {
 		log.Fatal(err)
@@ -48,10 +56,11 @@ func main() {
 		}
 
 		ip := clientIP(r)
-		country, code, city := geo.Lookup(ip)
+		ua := strings.ToLower(r.Header.Get("User-Agent"))
+		isCLI := strings.Contains(ua, "curl") || strings.Contains(ua, "wget") || strings.Contains(ua, "httpie")
 
 		if err := db.Update(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte("IPStats"))
+			b := tx.Bucket([]byte(ipStatsBucketName))
 			count := uint64(0)
 			if v := b.Get([]byte(ip)); v != nil {
 				count = btoi(v)
@@ -63,13 +72,11 @@ func main() {
 			return
 		}
 
-		ua := strings.ToLower(r.Header.Get("User-Agent"))
-		isCLI := strings.Contains(ua, "curl") || strings.Contains(ua, "wget") || strings.Contains(ua, "httpie")
-
 		if isCLI {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			fmt.Fprintf(w, "%s\n", ip)
 		} else {
+			country, code, city := lookupGeoCached(ip)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			fmt.Fprintf(w, htmlTemplate, ip, fallback(country, "unknown"), fallback(code, "--"), fallback(city, "unknown"))
 		}
@@ -81,28 +88,43 @@ func main() {
 
 func showStats(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	type ipStatLine struct {
+		ip    string
+		count uint64
+	}
+
+	lines := make([]ipStatLine, 0, 128)
+	total := uint64(0)
+
 	if err := db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte("IPStats"))
-		total := uint64(0)
-
-		if err := b.ForEach(func(_, v []byte) error {
-			total += btoi(v)
-			return nil
-		}); err != nil {
-			return err
-		}
-
-		fmt.Fprintf(w, "Total requests: %d\n", total)
-
+		b := tx.Bucket([]byte(ipStatsBucketName))
 		return b.ForEach(func(k, v []byte) error {
-			ip := string(k)
-			country, code, city := geo.Lookup(ip)
-			fmt.Fprintf(w, "IP: %s | Country: %s (%s) | City: %s | Count: %d\n", ip, fallback(country, "unknown"), fallback(code, "--"), fallback(city, "unknown"), btoi(v))
+			count := btoi(v)
+			total += count
+			lines = append(lines, ipStatLine{
+				ip:    string(k),
+				count: count,
+			})
 			return nil
 		})
 	}); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		log.Printf("db view error: %v", err)
+		return
+	}
+
+	fmt.Fprintf(w, "Total requests: %d\n", total)
+	for _, line := range lines {
+		country, code, city := lookupGeoCached(line.ip)
+		fmt.Fprintf(
+			w,
+			"IP: %s | Country: %s (%s) | City: %s | Count: %d\n",
+			line.ip,
+			fallback(country, "unknown"),
+			fallback(code, "--"),
+			fallback(city, "unknown"),
+			line.count,
+		)
 	}
 }
 
@@ -132,6 +154,14 @@ type ipAPIResponse struct {
 	CountryName string `json:"country_name"`
 	CountryCode string `json:"country"`
 	City        string `json:"city"`
+}
+
+type persistedGeoEntry struct {
+	Country string `json:"country"`
+	Code    string `json:"code"`
+	City    string `json:"city"`
+	Success bool   `json:"success"`
+	SavedAt int64  `json:"saved_at"`
 }
 
 func newGeoService() *geoService {
@@ -236,6 +266,79 @@ func (g *geoService) lookupIPAPI(ip string) (string, string, string) {
 		return "", "", ""
 	}
 	return parsed.CountryName, parsed.CountryCode, parsed.City
+}
+
+func lookupGeoCached(ip string) (string, string, string) {
+	if country, code, city, ok := readGeoCache(ip); ok {
+		return country, code, city
+	}
+
+	country, code, city := geo.Lookup(ip)
+	writeGeoCache(ip, country, code, city)
+	return country, code, city
+}
+
+func readGeoCache(ip string) (string, string, string, bool) {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return "", "", "", false
+	}
+
+	var entry persistedGeoEntry
+	found := false
+	if err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(geoCacheBucketName))
+		raw := b.Get([]byte(ip))
+		if len(raw) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			return nil
+		}
+		found = true
+		return nil
+	}); err != nil {
+		return "", "", "", false
+	}
+	if !found {
+		return "", "", "", false
+	}
+
+	age := time.Since(time.Unix(entry.SavedAt, 0))
+	if entry.Success {
+		if age > 30*24*time.Hour {
+			return "", "", "", false
+		}
+		return entry.Country, entry.Code, entry.City, true
+	}
+	if age > 12*time.Hour {
+		return "", "", "", false
+	}
+	return "", "", "", true
+}
+
+func writeGeoCache(ip, country, code, city string) {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return
+	}
+
+	entry := persistedGeoEntry{
+		Country: strings.TrimSpace(country),
+		Code:    strings.TrimSpace(code),
+		City:    strings.TrimSpace(city),
+		Success: strings.TrimSpace(country) != "",
+		SavedAt: time.Now().Unix(),
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+
+	_ = db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(geoCacheBucketName))
+		return b.Put([]byte(ip), raw)
+	})
 }
 
 func clientIP(r *http.Request) string {
