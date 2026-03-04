@@ -788,7 +788,6 @@ var statsHTMLTemplate = template.Must(template.New("stats").Parse(`
         <div class="badge">Stats since: {{.StatsSince}}</div>
         <div class="badge">Page: {{.Page}} / {{.TotalPages}}</div>
         <div class="badge">Page size: {{.PageSize}}</div>
-        <div class="badge">Sort: {{.Sort}}</div>
     </div>
     <div class="actions">
         <a href="/">Back to IP page</a>
