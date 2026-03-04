@@ -62,6 +62,8 @@ type statsHTMLPageData struct {
 	TotalPages    int
 	Sort          string
 	Items         []statsItem
+	HasPrev       bool
+	HasNext       bool
 	PrevURL       string
 	NextURL       string
 }
@@ -200,6 +202,8 @@ func showStatsHTML(w http.ResponseWriter, r *http.Request) {
 	if nextPage > totalPages {
 		nextPage = totalPages
 	}
+	hasPrev := page > 1
+	hasNext := page < totalPages
 
 	data := statsHTMLPageData{
 		TotalRequests: total,
@@ -209,6 +213,8 @@ func showStatsHTML(w http.ResponseWriter, r *http.Request) {
 		TotalPages:    totalPages,
 		Sort:          sortBy,
 		Items:         items,
+		HasPrev:       hasPrev,
+		HasNext:       hasNext,
 		PrevURL:       buildStatsURL("/stats", prevPage, pageSize, sortBy),
 		NextURL:       buildStatsURL("/stats", nextPage, pageSize, sortBy),
 	}
@@ -660,8 +666,8 @@ var statsHTMLTemplate = template.Must(template.New("stats").Parse(`
         </tbody>
     </table>
     <div class="pager">
-        <a href="{{.PrevURL}}">Prev</a>
-        <a href="{{.NextURL}}">Next</a>
+        {{if .HasPrev}}<a href="{{.PrevURL}}">Prev</a>{{end}}
+        {{if .HasNext}}<a href="{{.NextURL}}">Next</a>{{end}}
     </div>
 </body>
 </html>
