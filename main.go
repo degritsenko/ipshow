@@ -25,11 +25,17 @@ var geo = newGeoService()
 const (
 	ipStatsBucketName  = "IPStats"
 	geoCacheBucketName = "GeoCache"
+
 	geoSuccessCacheTTL = 14 * 24 * time.Hour
 	geoFailureCacheTTL = 60 * time.Minute
 	geoRefreshInterval = 2 * time.Hour
 	geoRefreshTopN     = 500
 	geoRefreshPause    = 75 * time.Millisecond
+
+	defaultPage     = 1
+	defaultPageSize = 200
+	maxPageSize     = 1000
+	defaultSort     = "count_desc"
 )
 
 func itob(v uint64) []byte {
@@ -93,23 +99,13 @@ func main() {
 		}
 
 		ip := clientIP(r)
-		ua := strings.ToLower(r.Header.Get("User-Agent"))
-		isCLI := strings.Contains(ua, "curl") || strings.Contains(ua, "wget") || strings.Contains(ua, "httpie")
-
-		if err := db.Update(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(ipStatsBucketName))
-			count := uint64(0)
-			if v := b.Get([]byte(ip)); v != nil {
-				count = btoi(v)
-			}
-			return b.Put([]byte(ip), itob(count+1))
-		}); err != nil {
+		if err := incrementIPStat(ip); err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			log.Printf("db update error: %v", err)
 			return
 		}
 
-		if isCLI {
+		if isCLIUserAgent(r.Header.Get("User-Agent")) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			fmt.Fprintf(w, "%s\n", ip)
 		} else {
@@ -150,7 +146,7 @@ func refreshGeoCacheTopIPs() {
 		return
 	}
 
-	sortStatsLines(lines, "count_desc")
+	sortStatsLines(lines, defaultSort)
 	limit := geoRefreshTopN
 	if len(lines) < limit {
 		limit = len(lines)
@@ -256,9 +252,25 @@ func loadStatsLines() ([]ipStatLine, uint64, error) {
 	return lines, total, nil
 }
 
+func incrementIPStat(ip string) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(ipStatsBucketName))
+		count := uint64(0)
+		if v := b.Get([]byte(ip)); v != nil {
+			count = btoi(v)
+		}
+		return b.Put([]byte(ip), itob(count+1))
+	})
+}
+
+func isCLIUserAgent(userAgent string) bool {
+	ua := strings.ToLower(userAgent)
+	return strings.Contains(ua, "curl") || strings.Contains(ua, "wget") || strings.Contains(ua, "httpie")
+}
+
 func parsePageParams(r *http.Request) (int, int) {
-	page := 1
-	pageSize := 200
+	page := defaultPage
+	pageSize := defaultPageSize
 
 	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
@@ -270,8 +282,8 @@ func parsePageParams(r *http.Request) (int, int) {
 			pageSize = v
 		}
 	}
-	if pageSize > 1000 {
-		pageSize = 1000
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
 	}
 	return page, pageSize
 }
@@ -282,7 +294,7 @@ func parseSortParam(r *http.Request) string {
 	case "count_asc", "count_desc", "ip_asc", "ip_desc":
 		return sortBy
 	default:
-		return "count_desc"
+		return defaultSort
 	}
 }
 
@@ -311,7 +323,7 @@ func sortStatsLines(lines []ipStatLine, sortBy string) {
 
 func pageWindow(totalItems, page, pageSize int) (int, int, int, int) {
 	if totalItems == 0 {
-		return 1, 0, 0, 1
+		return defaultPage, 0, 0, 1
 	}
 
 	totalPages := int(math.Ceil(float64(totalItems) / float64(pageSize)))
