@@ -134,7 +134,10 @@ func showStatsHTML(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]statsItem, 0, end-start)
 	for _, line := range lines[start:end] {
-		country, code, city := lookupGeoCached(line.ip)
+		country, code, city, ok := readGeoCache(line.ip)
+		if !ok {
+			country, code, city = "", "", ""
+		}
 		items = append(items, statsItem{
 			IP:          line.ip,
 			Country:     fallback(country, "unknown"),
