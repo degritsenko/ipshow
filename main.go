@@ -71,6 +71,7 @@ type statsHTMLPageData struct {
 	TotalIPs      int
 	CLIRequests   uint64
 	BrowserReqs   uint64
+	StatsSince    string
 	Page          int
 	PageSize      int
 	TotalPages    int
@@ -233,12 +234,19 @@ func showStatsHTML(w http.ResponseWriter, r *http.Request) {
 		log.Printf("db req stats error: %v", err)
 		return
 	}
+	statsSince, err := readStatsSince()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		log.Printf("db stats since error: %v", err)
+		return
+	}
 
 	data := statsHTMLPageData{
 		TotalRequests: total,
 		TotalIPs:      len(lines),
 		CLIRequests:   cliReq,
 		BrowserReqs:   browserReq,
+		StatsSince:    statsSince,
 		Page:          page,
 		PageSize:      pageSize,
 		TotalPages:    totalPages,
@@ -309,7 +317,16 @@ func incrementIPStat(ip string, isCLI bool) error {
 		if v := reqBucket.Get(key); v != nil {
 			reqCount = btoi(v)
 		}
-		return reqBucket.Put(key, itob(reqCount+1))
+		if err := reqBucket.Put(key, itob(reqCount+1)); err != nil {
+			return err
+		}
+
+		if v := reqBucket.Get([]byte("stats_since_unix")); v == nil {
+			if err := reqBucket.Put([]byte("stats_since_unix"), itob(uint64(time.Now().Unix()))); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -327,6 +344,24 @@ func readRequestSourceCounts() (uint64, uint64, error) {
 		return nil
 	})
 	return cliReq, browserReq, err
+}
+
+func readStatsSince() (string, error) {
+	var since uint64
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(reqStatsBucketName))
+		if v := b.Get([]byte("stats_since_unix")); v != nil {
+			since = btoi(v)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if since == 0 {
+		return "n/a", nil
+	}
+	return time.Unix(int64(since), 0).UTC().Format("2006-01-02 15:04 UTC"), nil
 }
 
 func topAggItems(m map[string]uint64, limit int) []statsAggItem {
@@ -750,6 +785,7 @@ var statsHTMLTemplate = template.Must(template.New("stats").Parse(`
         <div class="badge">Total IPs: {{.TotalIPs}}</div>
         <div class="badge">CLI requests: {{.CLIRequests}}</div>
         <div class="badge">Browser requests: {{.BrowserReqs}}</div>
+        <div class="badge">Stats since: {{.StatsSince}}</div>
         <div class="badge">Page: {{.Page}} / {{.TotalPages}}</div>
         <div class="badge">Page size: {{.PageSize}}</div>
         <div class="badge">Sort: {{.Sort}}</div>
