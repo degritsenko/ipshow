@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"go.etcd.io/bbolt"
+	"html/template"
 	"log"
 	"math"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,20 +51,16 @@ type statsItem struct {
 	Count       uint64 `json:"count"`
 }
 
-type statsSummaryResponse struct {
-	TotalRequests uint64 `json:"total_requests"`
-	UniqueIPs     int    `json:"unique_ips"`
-	GeneratedAt   string `json:"generated_at"`
-}
-
-type statsPageResponse struct {
-	Page          int         `json:"page"`
-	PageSize      int         `json:"page_size"`
-	TotalItems    int         `json:"total_items"`
-	TotalPages    int         `json:"total_pages"`
-	TotalRequests uint64      `json:"total_requests"`
-	Sort          string      `json:"sort"`
-	Items         []statsItem `json:"items"`
+type statsHTMLPageData struct {
+	TotalRequests uint64
+	TotalIPs      int
+	Page          int
+	PageSize      int
+	TotalPages    int
+	Sort          string
+	Items         []statsItem
+	PrevURL       string
+	NextURL       string
 }
 
 func main() {
@@ -85,15 +83,7 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/stats" {
-			showStatsText(w, r)
-			return
-		}
-		if r.URL.Path == "/api/stats" {
-			showStatsJSON(w, r)
-			return
-		}
-		if r.URL.Path == "/api/stats/summary" {
-			showStatsSummaryJSON(w)
+			showStatsHTML(w, r)
 			return
 		}
 
@@ -128,32 +118,14 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func showStatsSummaryJSON(w http.ResponseWriter) {
-	lines, total, err := loadStatsLines()
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		log.Printf("db summary error: %v", err)
-		return
-	}
-
-	resp := statsSummaryResponse{
-		TotalRequests: total,
-		UniqueIPs:     len(lines),
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
-	}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(resp)
-}
-
-func showStatsJSON(w http.ResponseWriter, r *http.Request) {
+func showStatsHTML(w http.ResponseWriter, r *http.Request) {
 	page, pageSize := parsePageParams(r)
 	sortBy := parseSortParam(r)
 
-	lines, totalRequests, err := loadStatsLines()
+	lines, total, err := loadStatsLines()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
-		log.Printf("db stats error: %v", err)
+		log.Printf("db view error: %v", err)
 		return
 	}
 
@@ -172,39 +144,6 @@ func showStatsJSON(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	resp := statsPageResponse{
-		Page:          page,
-		PageSize:      pageSize,
-		TotalItems:    len(lines),
-		TotalPages:    totalPages,
-		TotalRequests: totalRequests,
-		Sort:          sortBy,
-		Items:         items,
-	}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(resp)
-}
-
-func showStatsText(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	page, pageSize := parsePageParams(r)
-	sortBy := parseSortParam(r)
-
-	lines, total, err := loadStatsLines()
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		log.Printf("db view error: %v", err)
-		return
-	}
-
-	sortStatsLines(lines, sortBy)
-	page, start, end, totalPages := pageWindow(len(lines), page, pageSize)
-	baseURL := requestBaseURL(r)
-	summaryURL := fmt.Sprintf("%s/api/stats/summary", baseURL)
-	apiURL := fmt.Sprintf("%s/api/stats?page=%d&page_size=%d&sort=%s", baseURL, page, pageSize, sortBy)
 	prevPage := page - 1
 	if prevPage < 1 {
 		prevPage = 1
@@ -213,31 +152,32 @@ func showStatsText(w http.ResponseWriter, r *http.Request) {
 	if nextPage > totalPages {
 		nextPage = totalPages
 	}
-	prevTextURL := fmt.Sprintf("%s/stats?page=%d&page_size=%d&sort=%s", baseURL, prevPage, pageSize, sortBy)
-	nextTextURL := fmt.Sprintf("%s/stats?page=%d&page_size=%d&sort=%s", baseURL, nextPage, pageSize, sortBy)
-	prevAPIURL := fmt.Sprintf("%s/api/stats?page=%d&page_size=%d&sort=%s", baseURL, prevPage, pageSize, sortBy)
-	nextAPIURL := fmt.Sprintf("%s/api/stats?page=%d&page_size=%d&sort=%s", baseURL, nextPage, pageSize, sortBy)
 
-	fmt.Fprintf(w, "Total requests: %d\n", total)
-	fmt.Fprintf(w, "Total IPs: %d | Page: %d/%d | Page size: %d | Sort: %s\n", len(lines), page, totalPages, pageSize, sortBy)
-	fmt.Fprintf(w, "Summary JSON: %s\n", summaryURL)
-	fmt.Fprintf(w, "Current JSON page: %s\n", apiURL)
-	fmt.Fprintf(w, "Prev page (text): %s\n", prevTextURL)
-	fmt.Fprintf(w, "Next page (text): %s\n", nextTextURL)
-	fmt.Fprintf(w, "Prev page (json): %s\n", prevAPIURL)
-	fmt.Fprintf(w, "Next page (json): %s\n", nextAPIURL)
-	for _, line := range lines[start:end] {
-		country, code, city := lookupGeoCached(line.ip)
-		fmt.Fprintf(
-			w,
-			"IP: %s | Country: %s (%s) | City: %s | Count: %d\n",
-			line.ip,
-			fallback(country, "unknown"),
-			fallback(code, "--"),
-			fallback(city, "unknown"),
-			line.count,
-		)
+	data := statsHTMLPageData{
+		TotalRequests: total,
+		TotalIPs:      len(lines),
+		Page:          page,
+		PageSize:      pageSize,
+		TotalPages:    totalPages,
+		Sort:          sortBy,
+		Items:         items,
+		PrevURL:       buildStatsURL("/stats", prevPage, pageSize, sortBy),
+		NextURL:       buildStatsURL("/stats", nextPage, pageSize, sortBy),
 	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := statsHTMLTemplate.Execute(w, data); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+		log.Printf("stats template error: %v", err)
+	}
+}
+
+func buildStatsURL(path string, page, pageSize int, sortBy string) string {
+	q := url.Values{}
+	q.Set("page", strconv.Itoa(page))
+	q.Set("page_size", strconv.Itoa(pageSize))
+	q.Set("sort", sortBy)
+	return path + "?" + q.Encode()
 }
 
 func loadStatsLines() ([]ipStatLine, uint64, error) {
@@ -331,21 +271,6 @@ func pageWindow(totalItems, page, pageSize int) (int, int, int, int) {
 		end = totalItems
 	}
 	return page, start, end, totalPages
-}
-
-func requestBaseURL(r *http.Request) string {
-	scheme := "http"
-	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
-		scheme = proto
-	} else if r.TLS != nil {
-		scheme = "https"
-	}
-
-	host := strings.TrimSpace(r.Host)
-	if host == "" {
-		host = "localhost"
-	}
-	return scheme + "://" + host
 }
 
 type geoService struct {
@@ -632,6 +557,67 @@ func fallback(v, def string) string {
 	}
 	return v
 }
+
+var statsHTMLTemplate = template.Must(template.New("stats").Parse(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stats</title>
+    <style>
+        body {font-family: -apple-system, system-ui, sans-serif; margin: 24px; color: #222; background: #fafafa;}
+        .top {display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 14px;}
+        .badge {padding: 8px 10px; border: 1px solid #ddd; background: #fff; border-radius: 8px;}
+        .actions a {margin-right: 12px;}
+        table {width: 100%; border-collapse: collapse; background: #fff;}
+        th, td {padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; font-size: 14px;}
+        th {background: #f3f3f3;}
+        .pager {margin-top: 12px;}
+        .pager a {margin-right: 12px;}
+    </style>
+</head>
+<body>
+    <h1>IP Stats</h1>
+    <div class="top">
+        <div class="badge">Total requests: {{.TotalRequests}}</div>
+        <div class="badge">Total IPs: {{.TotalIPs}}</div>
+        <div class="badge">Page: {{.Page}} / {{.TotalPages}}</div>
+        <div class="badge">Page size: {{.PageSize}}</div>
+        <div class="badge">Sort: {{.Sort}}</div>
+    </div>
+    <div class="actions">
+        <a href="/">Back to IP page</a>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>IP</th>
+                <th>Country</th>
+                <th>Code</th>
+                <th>City</th>
+                <th>Count</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Items}}
+            <tr>
+                <td>{{.IP}}</td>
+                <td>{{.Country}}</td>
+                <td>{{.CountryCode}}</td>
+                <td>{{.City}}</td>
+                <td>{{.Count}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    <div class="pager">
+        <a href="{{.PrevURL}}">Prev</a>
+        <a href="{{.NextURL}}">Next</a>
+    </div>
+</body>
+</html>
+`))
 
 const htmlTemplate = `
 <!DOCTYPE html>
