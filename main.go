@@ -25,6 +25,7 @@ var geo = newGeoService()
 const (
 	ipStatsBucketName  = "IPStats"
 	geoCacheBucketName = "GeoCache"
+	reqStatsBucketName = "RequestStats"
 
 	geoSuccessCacheTTL = 14 * 24 * time.Hour
 	geoFailureCacheTTL = 60 * time.Minute
@@ -53,21 +54,30 @@ type ipStatLine struct {
 }
 
 type statsItem struct {
-	IP          string `json:"ip"`
-	Country     string `json:"country"`
-	CountryCode string `json:"country_code"`
-	City        string `json:"city"`
-	Count       uint64 `json:"count"`
+	IP      string `json:"ip"`
+	Country string `json:"country"`
+	City    string `json:"city"`
+	ASN     string `json:"asn"`
+	Count   uint64 `json:"count"`
+}
+
+type statsAggItem struct {
+	Name  string
+	Count uint64
 }
 
 type statsHTMLPageData struct {
 	TotalRequests uint64
 	TotalIPs      int
+	CLIRequests   uint64
+	BrowserReqs   uint64
 	Page          int
 	PageSize      int
 	TotalPages    int
 	Sort          string
 	Items         []statsItem
+	TopCountries  []statsAggItem
+	TopCities     []statsAggItem
 	HasPrev       bool
 	HasNext       bool
 	PrevURL       string
@@ -86,7 +96,10 @@ func main() {
 		if _, err := tx.CreateBucketIfNotExists([]byte(ipStatsBucketName)); err != nil {
 			return err
 		}
-		_, err := tx.CreateBucketIfNotExists([]byte(geoCacheBucketName))
+		if _, err := tx.CreateBucketIfNotExists([]byte(geoCacheBucketName)); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists([]byte(reqStatsBucketName))
 		return err
 	}); err != nil {
 		log.Fatal(err)
@@ -99,17 +112,18 @@ func main() {
 		}
 
 		ip := clientIP(r)
-		if err := incrementIPStat(ip); err != nil {
+		isCLI := isCLIUserAgent(r.Header.Get("User-Agent"))
+		if err := incrementIPStat(ip, isCLI); err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			log.Printf("db update error: %v", err)
 			return
 		}
 
-		if isCLIUserAgent(r.Header.Get("User-Agent")) {
+		if isCLI {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			fmt.Fprintf(w, "%s\n", ip)
 		} else {
-			country, code, city := lookupGeoCached(ip)
+			country, code, city, _ := lookupGeoCached(ip)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			fmt.Fprintf(w, htmlTemplate, ip, fallback(country, "unknown"), fallback(code, "--"), fallback(city, "unknown"))
 		}
@@ -175,18 +189,30 @@ func showStatsHTML(w http.ResponseWriter, r *http.Request) {
 	sortStatsLines(lines, sortBy)
 	page, start, end, totalPages := pageWindow(len(lines), page, pageSize)
 
+	countryAgg := make(map[string]uint64)
+	cityAgg := make(map[string]uint64)
 	items := make([]statsItem, 0, end-start)
-	for _, line := range lines[start:end] {
-		country, code, city, ok := readGeoCache(line.ip)
+	for idx, line := range lines {
+		country, _, city, asn, ok := readGeoCache(line.ip)
 		if !ok {
-			country, code, city = "", "", ""
+			country, city, asn = "", "", ""
+		}
+		if c := strings.TrimSpace(country); c != "" {
+			countryAgg[c] += line.count
+		}
+		if c := strings.TrimSpace(city); c != "" {
+			cityAgg[c] += line.count
+		}
+
+		if idx < start || idx >= end {
+			continue
 		}
 		items = append(items, statsItem{
-			IP:          line.ip,
-			Country:     fallback(country, "unknown"),
-			CountryCode: fallback(code, "--"),
-			City:        fallback(city, "unknown"),
-			Count:       line.count,
+			IP:      line.ip,
+			Country: fallback(country, "unknown"),
+			City:    fallback(city, "unknown"),
+			ASN:     fallback(asn, "--"),
+			Count:   line.count,
 		})
 	}
 
@@ -201,14 +227,25 @@ func showStatsHTML(w http.ResponseWriter, r *http.Request) {
 	hasPrev := page > 1
 	hasNext := page < totalPages
 
+	cliReq, browserReq, err := readRequestSourceCounts()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		log.Printf("db req stats error: %v", err)
+		return
+	}
+
 	data := statsHTMLPageData{
 		TotalRequests: total,
 		TotalIPs:      len(lines),
+		CLIRequests:   cliReq,
+		BrowserReqs:   browserReq,
 		Page:          page,
 		PageSize:      pageSize,
 		TotalPages:    totalPages,
 		Sort:          sortBy,
 		Items:         items,
+		TopCountries:  topAggItems(countryAgg, 10),
+		TopCities:     topAggItems(cityAgg, 10),
 		HasPrev:       hasPrev,
 		HasNext:       hasNext,
 		PrevURL:       buildStatsURL("/stats", prevPage, pageSize, sortBy),
@@ -252,15 +289,64 @@ func loadStatsLines() ([]ipStatLine, uint64, error) {
 	return lines, total, nil
 }
 
-func incrementIPStat(ip string) error {
+func incrementIPStat(ip string, isCLI bool) error {
 	return db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(ipStatsBucketName))
 		count := uint64(0)
 		if v := b.Get([]byte(ip)); v != nil {
 			count = btoi(v)
 		}
-		return b.Put([]byte(ip), itob(count+1))
+		if err := b.Put([]byte(ip), itob(count+1)); err != nil {
+			return err
+		}
+
+		reqBucket := tx.Bucket([]byte(reqStatsBucketName))
+		key := []byte("browser")
+		if isCLI {
+			key = []byte("cli")
+		}
+		reqCount := uint64(0)
+		if v := reqBucket.Get(key); v != nil {
+			reqCount = btoi(v)
+		}
+		return reqBucket.Put(key, itob(reqCount+1))
 	})
+}
+
+func readRequestSourceCounts() (uint64, uint64, error) {
+	var cliReq uint64
+	var browserReq uint64
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(reqStatsBucketName))
+		if v := b.Get([]byte("cli")); v != nil {
+			cliReq = btoi(v)
+		}
+		if v := b.Get([]byte("browser")); v != nil {
+			browserReq = btoi(v)
+		}
+		return nil
+	})
+	return cliReq, browserReq, err
+}
+
+func topAggItems(m map[string]uint64, limit int) []statsAggItem {
+	if len(m) == 0 || limit <= 0 {
+		return nil
+	}
+	out := make([]statsAggItem, 0, len(m))
+	for k, v := range m {
+		out = append(out, statsAggItem{Name: k, Count: v})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Count > out[j].Count
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 func isCLIUserAgent(userAgent string) bool {
@@ -351,6 +437,7 @@ type geoCache struct {
 	country string
 	code    string
 	city    string
+	asn     string
 	exp     time.Time
 }
 
@@ -359,12 +446,16 @@ type ipWhoIsResponse struct {
 	Country     string `json:"country"`
 	CountryCode string `json:"country_code"`
 	City        string `json:"city"`
+	Connection  struct {
+		ASN int `json:"asn"`
+	} `json:"connection"`
 }
 
 type ipAPIResponse struct {
 	CountryName string `json:"country_name"`
 	CountryCode string `json:"country"`
 	City        string `json:"city"`
+	ASN         string `json:"asn"`
 }
 
 type geoJSResponse struct {
@@ -377,6 +468,7 @@ type persistedGeoEntry struct {
 	Country string `json:"country"`
 	Code    string `json:"code"`
 	City    string `json:"city"`
+	ASN     string `json:"asn"`
 	Success bool   `json:"success"`
 	SavedAt int64  `json:"saved_at"`
 }
@@ -390,18 +482,18 @@ func newGeoService() *geoService {
 	}
 }
 
-func (g *geoService) Lookup(ip string) (string, string, string) {
+func (g *geoService) Lookup(ip string) (string, string, string, string) {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
-		return "", "", ""
+		return "", "", "", ""
 	}
 
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	if addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() {
-		return "Local/Private", "LAN", "Local/Private"
+		return "Local/Private", "LAN", "Local/Private", "LAN"
 	}
 
 	now := time.Now()
@@ -409,30 +501,32 @@ func (g *geoService) Lookup(ip string) (string, string, string) {
 	item, ok := g.cache[ip]
 	g.mu.RUnlock()
 	if ok && now.Before(item.exp) {
-		return item.country, item.code, item.city
+		return item.country, item.code, item.city, item.asn
 	}
 
-	country, code, city := g.lookupIPWhoIs(ip)
+	country, code, city, asn := g.lookupIPWhoIs(ip)
 	if strings.TrimSpace(country) == "" {
-		country, code, city = g.lookupIPAPI(ip)
+		country, code, city, asn = g.lookupIPAPI(ip)
 	}
 	if strings.TrimSpace(country) == "" {
-		country, code, city = g.lookupGeoJS(ip)
+		country, code, city, asn = g.lookupGeoJS(ip)
 	}
 
 	country = strings.TrimSpace(country)
 	code = strings.TrimSpace(code)
 	city = strings.TrimSpace(city)
+	asn = strings.TrimSpace(asn)
 	if country == "" {
 		g.mu.Lock()
 		g.cache[ip] = geoCache{
 			country: "",
 			code:    "",
 			city:    "",
+			asn:     "",
 			exp:     now.Add(g.failTTL),
 		}
 		g.mu.Unlock()
-		return "", "", ""
+		return "", "", "", ""
 	}
 
 	g.mu.Lock()
@@ -440,89 +534,94 @@ func (g *geoService) Lookup(ip string) (string, string, string) {
 		country: country,
 		code:    code,
 		city:    city,
+		asn:     asn,
 		exp:     now.Add(g.ttl),
 	}
 	g.mu.Unlock()
-	return country, code, city
+	return country, code, city, asn
 }
 
-func (g *geoService) lookupIPWhoIs(ip string) (string, string, string) {
+func (g *geoService) lookupIPWhoIs(ip string) (string, string, string, string) {
 	req, err := http.NewRequest(http.MethodGet, "https://ipwho.is/"+ip, nil)
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", ""
+		return "", "", "", ""
 	}
 
 	var parsed ipWhoIsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil || !parsed.Success {
-		return "", "", ""
+		return "", "", "", ""
 	}
-	return parsed.Country, parsed.CountryCode, parsed.City
+	asn := ""
+	if parsed.Connection.ASN > 0 {
+		asn = fmt.Sprintf("AS%d", parsed.Connection.ASN)
+	}
+	return parsed.Country, parsed.CountryCode, parsed.City, asn
 }
 
-func (g *geoService) lookupIPAPI(ip string) (string, string, string) {
+func (g *geoService) lookupIPAPI(ip string) (string, string, string, string) {
 	req, err := http.NewRequest(http.MethodGet, "https://ipapi.co/"+ip+"/json/", nil)
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", ""
+		return "", "", "", ""
 	}
 
 	var parsed ipAPIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
-	return parsed.CountryName, parsed.CountryCode, parsed.City
+	return parsed.CountryName, parsed.CountryCode, parsed.City, parsed.ASN
 }
 
-func (g *geoService) lookupGeoJS(ip string) (string, string, string) {
+func (g *geoService) lookupGeoJS(ip string) (string, string, string, string) {
 	req, err := http.NewRequest(http.MethodGet, "https://get.geojs.io/v1/ip/geo/"+ip+".json", nil)
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", ""
+		return "", "", "", ""
 	}
 
 	var parsed geoJSResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return "", "", ""
+		return "", "", "", ""
 	}
-	return parsed.Country, parsed.CountryCode, parsed.City
+	return parsed.Country, parsed.CountryCode, parsed.City, ""
 }
 
-func lookupGeoCached(ip string) (string, string, string) {
-	if country, code, city, ok := readGeoCache(ip); ok {
-		return country, code, city
+func lookupGeoCached(ip string) (string, string, string, string) {
+	if country, code, city, asn, ok := readGeoCache(ip); ok {
+		return country, code, city, asn
 	}
 
-	country, code, city := geo.Lookup(ip)
-	writeGeoCache(ip, country, code, city)
-	return country, code, city
+	country, code, city, asn := geo.Lookup(ip)
+	writeGeoCache(ip, country, code, city, asn)
+	return country, code, city, asn
 }
 
-func readGeoCache(ip string) (string, string, string, bool) {
+func readGeoCache(ip string) (string, string, string, string, bool) {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 
 	var entry persistedGeoEntry
@@ -539,26 +638,26 @@ func readGeoCache(ip string) (string, string, string, bool) {
 		found = true
 		return nil
 	}); err != nil {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	if !found {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 
 	age := time.Since(time.Unix(entry.SavedAt, 0))
 	if entry.Success {
 		if age > geoSuccessCacheTTL {
-			return "", "", "", false
+			return "", "", "", "", false
 		}
-		return entry.Country, entry.Code, entry.City, true
+		return entry.Country, entry.Code, entry.City, entry.ASN, true
 	}
 	if age > geoFailureCacheTTL {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
-	return "", "", "", true
+	return "", "", "", "", true
 }
 
-func writeGeoCache(ip, country, code, city string) {
+func writeGeoCache(ip, country, code, city, asn string) {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
 		return
@@ -568,6 +667,7 @@ func writeGeoCache(ip, country, code, city string) {
 		Country: strings.TrimSpace(country),
 		Code:    strings.TrimSpace(code),
 		City:    strings.TrimSpace(city),
+		ASN:     strings.TrimSpace(asn),
 		Success: strings.TrimSpace(country) != "",
 		SavedAt: time.Now().Unix(),
 	}
@@ -648,6 +748,8 @@ var statsHTMLTemplate = template.Must(template.New("stats").Parse(`
     <div class="top">
         <div class="badge">Total requests: {{.TotalRequests}}</div>
         <div class="badge">Total IPs: {{.TotalIPs}}</div>
+        <div class="badge">CLI requests: {{.CLIRequests}}</div>
+        <div class="badge">Browser requests: {{.BrowserReqs}}</div>
         <div class="badge">Page: {{.Page}} / {{.TotalPages}}</div>
         <div class="badge">Page size: {{.PageSize}}</div>
         <div class="badge">Sort: {{.Sort}}</div>
@@ -660,8 +762,8 @@ var statsHTMLTemplate = template.Must(template.New("stats").Parse(`
             <tr>
                 <th>IP</th>
                 <th>Country</th>
-                <th>Code</th>
                 <th>City</th>
+                <th>ASN</th>
                 <th>Count</th>
             </tr>
         </thead>
@@ -670,13 +772,37 @@ var statsHTMLTemplate = template.Must(template.New("stats").Parse(`
             <tr>
                 <td>{{.IP}}</td>
                 <td>{{.Country}}</td>
-                <td>{{.CountryCode}}</td>
                 <td>{{.City}}</td>
+                <td>{{.ASN}}</td>
                 <td>{{.Count}}</td>
             </tr>
             {{end}}
         </tbody>
     </table>
+    <div style="display:flex; gap:24px; margin-top:18px; flex-wrap:wrap;">
+        <div>
+            <h3>Top Countries</h3>
+            <table style="width:320px;">
+                <thead><tr><th>Country</th><th>Requests</th></tr></thead>
+                <tbody>
+                    {{range .TopCountries}}
+                    <tr><td>{{.Name}}</td><td>{{.Count}}</td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        <div>
+            <h3>Top Cities</h3>
+            <table style="width:320px;">
+                <thead><tr><th>City</th><th>Requests</th></tr></thead>
+                <tbody>
+                    {{range .TopCities}}
+                    <tr><td>{{.Name}}</td><td>{{.Count}}</td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
     <div class="pager">
         {{if .HasPrev}}<a href="{{.PrevURL}}">Prev</a>{{end}}
         {{if .HasNext}}<a href="{{.NextURL}}">Next</a>{{end}}
