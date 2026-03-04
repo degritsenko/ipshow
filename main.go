@@ -27,6 +27,9 @@ const (
 	geoCacheBucketName = "GeoCache"
 	geoSuccessCacheTTL = 30 * 24 * time.Hour
 	geoFailureCacheTTL = 10 * time.Minute
+	geoRefreshInterval = 2 * time.Hour
+	geoRefreshTopN     = 500
+	geoRefreshPause    = 75 * time.Millisecond
 )
 
 func itob(v uint64) []byte {
@@ -114,8 +117,50 @@ func main() {
 		}
 	})
 
+	startGeoRefreshWorker()
+
 	log.Println("Running on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func startGeoRefreshWorker() {
+	go func() {
+		// First pass shortly after startup to warm the cache.
+		time.Sleep(30 * time.Second)
+		refreshGeoCacheTopIPs()
+
+		ticker := time.NewTicker(geoRefreshInterval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			refreshGeoCacheTopIPs()
+		}
+	}()
+}
+
+func refreshGeoCacheTopIPs() {
+	lines, _, err := loadStatsLines()
+	if err != nil {
+		log.Printf("geo refresh: load stats error: %v", err)
+		return
+	}
+	if len(lines) == 0 {
+		return
+	}
+
+	sortStatsLines(lines, "count_desc")
+	limit := geoRefreshTopN
+	if len(lines) < limit {
+		limit = len(lines)
+	}
+
+	updated := 0
+	for i := 0; i < limit; i++ {
+		lookupGeoCached(lines[i].ip)
+		updated++
+		time.Sleep(geoRefreshPause)
+	}
+	log.Printf("geo refresh: processed %d IPs", updated)
 }
 
 func showStatsHTML(w http.ResponseWriter, r *http.Request) {
