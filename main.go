@@ -25,8 +25,8 @@ var geo = newGeoService()
 const (
 	ipStatsBucketName  = "IPStats"
 	geoCacheBucketName = "GeoCache"
-	geoSuccessCacheTTL = 30 * 24 * time.Hour
-	geoFailureCacheTTL = 10 * time.Minute
+	geoSuccessCacheTTL = 14 * 24 * time.Hour
+	geoFailureCacheTTL = 60 * time.Minute
 	geoRefreshInterval = 2 * time.Hour
 	geoRefreshTopN     = 500
 	geoRefreshPause    = 75 * time.Millisecond
