@@ -20,6 +20,8 @@ var geo = newGeoService()
 const (
 	ipStatsBucketName  = "IPStats"
 	geoCacheBucketName = "GeoCache"
+	geoSuccessCacheTTL = 30 * 24 * time.Hour
+	geoFailureCacheTTL = 10 * time.Minute
 )
 
 func itob(v uint64) []byte {
@@ -156,6 +158,12 @@ type ipAPIResponse struct {
 	City        string `json:"city"`
 }
 
+type geoJSResponse struct {
+	Country     string `json:"country"`
+	CountryCode string `json:"country_code"`
+	City        string `json:"city"`
+}
+
 type persistedGeoEntry struct {
 	Country string `json:"country"`
 	Code    string `json:"code"`
@@ -198,6 +206,9 @@ func (g *geoService) Lookup(ip string) (string, string, string) {
 	country, code, city := g.lookupIPWhoIs(ip)
 	if strings.TrimSpace(country) == "" {
 		country, code, city = g.lookupIPAPI(ip)
+	}
+	if strings.TrimSpace(country) == "" {
+		country, code, city = g.lookupGeoJS(ip)
 	}
 
 	country = strings.TrimSpace(country)
@@ -268,6 +279,27 @@ func (g *geoService) lookupIPAPI(ip string) (string, string, string) {
 	return parsed.CountryName, parsed.CountryCode, parsed.City
 }
 
+func (g *geoService) lookupGeoJS(ip string) (string, string, string) {
+	req, err := http.NewRequest(http.MethodGet, "https://get.geojs.io/v1/ip/geo/"+ip+".json", nil)
+	if err != nil {
+		return "", "", ""
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return "", "", ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", ""
+	}
+
+	var parsed geoJSResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", "", ""
+	}
+	return parsed.Country, parsed.CountryCode, parsed.City
+}
+
 func lookupGeoCached(ip string) (string, string, string) {
 	if country, code, city, ok := readGeoCache(ip); ok {
 		return country, code, city
@@ -306,12 +338,12 @@ func readGeoCache(ip string) (string, string, string, bool) {
 
 	age := time.Since(time.Unix(entry.SavedAt, 0))
 	if entry.Success {
-		if age > 30*24*time.Hour {
+		if age > geoSuccessCacheTTL {
 			return "", "", "", false
 		}
 		return entry.Country, entry.Code, entry.City, true
 	}
-	if age > 12*time.Hour {
+	if age > geoFailureCacheTTL {
 		return "", "", "", false
 	}
 	return "", "", "", true
