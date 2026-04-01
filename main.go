@@ -655,25 +655,126 @@ const htmlTemplate = `
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IP Check</title>
     <style>
-        body {font-family: -apple-system, system-ui, sans-serif; background: #fdfdfd; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; color: #444;}
-        .container {text-align: center; padding: 20px;}
-        h1 {font-weight: normal; font-size: 1.1rem; color: #888; margin-bottom: 5px;}
-        .ip {font-size: clamp(1.5rem, 8vw, 2.5rem); font-weight: bold; color: #222; margin-bottom: 10px;}
-        .location {font-size: 1.1rem; color: #666;}
-        .stats {margin-top: 18px; text-align: left; display: inline-block; color: #444; font-size: 0.95rem; line-height: 1.55;}
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap');
+
+        :root {
+            --bg-1: #f4efe6;
+            --bg-2: #dbe7f3;
+            --ink: #1a1f24;
+            --muted: #596673;
+            --panel: rgba(255, 255, 255, 0.72);
+            --line: rgba(26, 31, 36, 0.1);
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background:
+                radial-gradient(1200px 700px at 80%% -10%%, #ffd3a5 0%%, transparent 55%%),
+                radial-gradient(900px 500px at -10%% 100%%, #9fc4e3 0%%, transparent 60%%),
+                linear-gradient(135deg, var(--bg-1), var(--bg-2));
+            color: var(--ink);
+            font-family: "Space Grotesk", "Segoe UI", "Trebuchet MS", sans-serif;
+            padding: 24px;
+        }
+
+        .container {
+            width: min(760px, 100%%);
+            border: 1px solid var(--line);
+            background: var(--panel);
+            backdrop-filter: blur(10px);
+            border-radius: 24px;
+            box-shadow: 0 24px 70px rgba(12, 28, 45, 0.14);
+            padding: 28px;
+        }
+
+        .label {
+            font-size: 0.92rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 8px;
+        }
+
+        .ip {
+            margin: 0;
+            font-size: clamp(2rem, 7vw, 4rem);
+            font-weight: 700;
+            line-height: 1.05;
+            word-break: break-word;
+        }
+
+        .location {
+            margin-top: 12px;
+            font-size: clamp(1.05rem, 2vw, 1.35rem);
+            color: #2f3a45;
+        }
+
+        .stats {
+            margin-top: 24px;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .stat {
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 14px;
+            padding: 11px 12px;
+        }
+
+        .stat .k {
+            font-size: 0.78rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+
+        .stat .v {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--ink);
+        }
+
+        @media (max-width: 640px) {
+            .container { padding: 20px; border-radius: 18px; }
+            .stats { grid-template-columns: 1fr; }
+            .stat .v { font-size: 1.05rem; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Your IP address</h1>
-        <div class="ip">%s</div>
+        <div class="label">Your IP Address</div>
+        <h1 class="ip">%s</h1>
         <div class="location">%s, %s</div>
         <div class="stats">
-            <div>Total requests: %d</div>
-            <div>Total IPs: %d</div>
-            <div>CLI requests: %d</div>
-            <div>Browser requests: %d</div>
-            <div>Stats since: %s</div>
+            <div class="stat">
+                <div class="k">Total Requests</div>
+                <div class="v">%d</div>
+            </div>
+            <div class="stat">
+                <div class="k">Total IPs</div>
+                <div class="v">%d</div>
+            </div>
+            <div class="stat">
+                <div class="k">CLI Requests</div>
+                <div class="v">%d</div>
+            </div>
+            <div class="stat">
+                <div class="k">Browser Requests</div>
+                <div class="v">%d</div>
+            </div>
+            <div class="stat" style="grid-column: 1 / -1;">
+                <div class="k">Stats Since</div>
+                <div class="v">%s</div>
+            </div>
         </div>
     </div>
 </body>
