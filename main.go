@@ -657,76 +657,54 @@ const htmlTemplate = `
     <style>
         body {
             margin: 0;
-            min-height: 100vh;
             background: #ffffff;
             color: #111111;
             font-family: "SF Mono", "Menlo", "Consolas", "Liberation Mono", monospace;
-            padding: 32px 20px;
+            padding: 28px 20px;
+            line-height: 1.45;
         }
 
         .container {
             width: min(760px, 100%%);
             margin: 0 auto;
-            border: 2px solid #111111;
-            padding: 18px;
         }
 
         .label {
             font-size: 0.78rem;
-            letter-spacing: 0.06em;
             text-transform: uppercase;
-            color: #555555;
+            letter-spacing: 0.06em;
+            color: #444444;
             margin-bottom: 8px;
         }
 
         .ip {
             margin: 0;
-            font-size: clamp(1.8rem, 5.4vw, 3.2rem);
+            font-size: clamp(2rem, 5.2vw, 3.1rem);
             font-weight: 700;
-            line-height: 1.1;
+            letter-spacing: 0.01em;
             word-break: break-word;
         }
 
         .location {
-            margin-top: 8px;
+            margin-top: 6px;
             font-size: 1rem;
-            color: #333333;
+            color: #222222;
         }
 
-        .stats {
-            margin-top: 14px;
-            border-top: 1px solid #111111;
-            padding-top: 10px;
+        .sep {
+            margin: 18px 0 14px;
+            color: #666666;
+            font-size: 0.95rem;
         }
 
-        .stat {
-            display: grid;
-            grid-template-columns: 190px 1fr;
-            gap: 12px;
-            padding: 4px 0;
-            border-bottom: 1px dotted #d4d4d4;
-        }
-
-        .stat:last-child {
-            border-bottom: 0;
-        }
-
-        .k {
-            color: #555555;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-            font-size: 0.78rem;
-        }
-
-        .v {
+        .line {
+            margin: 2px 0;
+            font-size: 1rem;
             color: #111111;
-            font-size: 0.98rem;
         }
 
         @media (max-width: 640px) {
-            body { padding: 14px; }
-            .container { padding: 14px; }
-            .stat { grid-template-columns: 1fr; gap: 2px; padding: 8px 0; }
+            body { padding: 18px 14px; }
         }
     </style>
 </head>
@@ -735,23 +713,12 @@ const htmlTemplate = `
         <div class="label">Your IP Address</div>
         <h1 class="ip">%s</h1>
         <div class="location">%s, %s</div>
-        <div class="stats">
-            <div class="stat">
-                <div class="k">Total requests</div><div class="v">%d</div>
-            </div>
-            <div class="stat">
-                <div class="k">Total IPs</div><div class="v">%d</div>
-            </div>
-            <div class="stat">
-                <div class="k">CLI requests</div><div class="v">%d</div>
-            </div>
-            <div class="stat">
-                <div class="k">Browser requests</div><div class="v">%d</div>
-            </div>
-            <div class="stat">
-                <div class="k">Stats since</div><div class="v">%s</div>
-            </div>
-        </div>
+        <div class="sep">---</div>
+        <div class="line">Total requests: %d</div>
+        <div class="line">Total IPs: %d</div>
+        <div class="line">CLI requests: %d</div>
+        <div class="line">Browser requests: %d</div>
+        <div class="line">Stats since: %s</div>
     </div>
 </body>
 </html>`
