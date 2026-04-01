@@ -26,6 +26,9 @@ const (
 	ipStatsBucketName  = "IPStats"
 	geoCacheBucketName = "GeoCache"
 	reqStatsBucketName = "RequestStats"
+	countryAggBucket   = "CountryAgg"
+	cityAggBucket      = "CityAgg"
+	ipAggAccounted     = "IPAggAccounted"
 
 	geoSuccessCacheTTL = 14 * 24 * time.Hour
 	geoFailureCacheTTL = 60 * time.Minute
@@ -37,6 +40,7 @@ const (
 	defaultPageSize = 200
 	maxPageSize     = 1000
 	defaultSort     = "count_desc"
+	minStatsCount   = 3
 )
 
 func itob(v uint64) []byte {
@@ -101,7 +105,16 @@ func main() {
 		if _, err := tx.CreateBucketIfNotExists([]byte(geoCacheBucketName)); err != nil {
 			return err
 		}
-		_, err := tx.CreateBucketIfNotExists([]byte(reqStatsBucketName))
+		if _, err := tx.CreateBucketIfNotExists([]byte(reqStatsBucketName)); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists([]byte(countryAggBucket)); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists([]byte(cityAggBucket)); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists([]byte(ipAggAccounted))
 		return err
 	}); err != nil {
 		log.Fatal(err)
@@ -170,7 +183,9 @@ func refreshGeoCacheTopIPs() {
 
 	updated := 0
 	for i := 0; i < limit; i++ {
-		_, _, _, _, _ = lookupGeoCached(lines[i].ip)
+		ip := lines[i].ip
+		_, _, _, _, _ = lookupGeoCached(ip)
+		_ = ensureAggAccounted(ip)
 		updated++
 		time.Sleep(geoRefreshPause)
 	}
@@ -188,24 +203,28 @@ func showStatsHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sortStatsLines(lines, sortBy)
-	page, start, end, totalPages := pageWindow(len(lines), page, pageSize)
+	filtered := make([]ipStatLine, 0, len(lines))
+	for _, line := range lines {
+		if line.count >= minStatsCount {
+			filtered = append(filtered, line)
+		}
+	}
 
-	countryAgg := make(map[string]uint64)
-	cityAgg := make(map[string]uint64)
+	sortStatsLines(filtered, sortBy)
+	page, start, end, totalPages := pageWindow(len(filtered), page, pageSize)
+
+	countryAgg, cityAgg, err := readAggs()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		log.Printf("db agg error: %v", err)
+		return
+	}
 	items := make([]statsItem, 0, end-start)
-	for idx, line := range lines {
+	for idx, line := range filtered {
 		country, _, city, asn, asnName, ok := readGeoCache(line.ip)
 		if !ok {
 			country, city, asn, asnName = "", "", "", ""
 		}
-		if c := strings.TrimSpace(country); c != "" {
-			countryAgg[c] += line.count
-		}
-		if c := strings.TrimSpace(city); c != "" {
-			cityAgg[c] += line.count
-		}
-
 		if idx < start || idx >= end {
 			continue
 		}
@@ -245,7 +264,7 @@ func showStatsHTML(w http.ResponseWriter, r *http.Request) {
 
 	data := statsHTMLPageData{
 		TotalRequests: total,
-		TotalIPs:      len(lines),
+		TotalIPs:      len(filtered),
 		CLIRequests:   cliReq,
 		BrowserReqs:   browserReq,
 		StatsSince:    statsSince,
@@ -306,7 +325,8 @@ func incrementIPStat(ip string, isCLI bool) error {
 		if v := b.Get([]byte(ip)); v != nil {
 			count = btoi(v)
 		}
-		if err := b.Put([]byte(ip), itob(count+1)); err != nil {
+		newCount := count + 1
+		if err := b.Put([]byte(ip), itob(newCount)); err != nil {
 			return err
 		}
 
@@ -328,7 +348,91 @@ func incrementIPStat(ip string, isCLI bool) error {
 				return err
 			}
 		}
+
+		entry, ok := readGeoCacheFromTx(tx, ip)
+		if !ok || !entry.Success {
+			return nil
+		}
+		return updateAggsForIP(tx, ip, entry, newCount)
+	})
+}
+
+func updateAggsForIP(tx *bbolt.Tx, ip string, entry persistedGeoEntry, currentCount uint64) error {
+	if currentCount < minStatsCount {
 		return nil
+	}
+	country := strings.TrimSpace(entry.Country)
+	city := strings.TrimSpace(entry.City)
+	if country == "" && city == "" {
+		return nil
+	}
+
+	acc := tx.Bucket([]byte(ipAggAccounted))
+	if acc == nil {
+		return nil
+	}
+	accounted := acc.Get([]byte(ip)) != nil
+
+	incr := uint64(1)
+	if !accounted {
+		incr = currentCount
+		if err := acc.Put([]byte(ip), []byte{1}); err != nil {
+			return err
+		}
+	}
+
+	if country != "" {
+		if err := addAggCount(tx.Bucket([]byte(countryAggBucket)), country, incr); err != nil {
+			return err
+		}
+	}
+	if city != "" {
+		if err := addAggCount(tx.Bucket([]byte(cityAggBucket)), city, incr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func addAggCount(b *bbolt.Bucket, key string, incr uint64) error {
+	if b == nil {
+		return nil
+	}
+	cur := uint64(0)
+	if v := b.Get([]byte(key)); v != nil {
+		cur = btoi(v)
+	}
+	return b.Put([]byte(key), itob(cur+incr))
+}
+
+func ensureAggAccounted(ip string) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		acc := tx.Bucket([]byte(ipAggAccounted))
+		if acc == nil {
+			return nil
+		}
+		if acc.Get([]byte(ip)) != nil {
+			return nil
+		}
+
+		entry, ok := readGeoCacheFromTx(tx, ip)
+		if !ok || !entry.Success {
+			return nil
+		}
+
+		ipBucket := tx.Bucket([]byte(ipStatsBucketName))
+		if ipBucket == nil {
+			return nil
+		}
+		raw := ipBucket.Get([]byte(ip))
+		if raw == nil {
+			return nil
+		}
+		currentCount := btoi(raw)
+		if currentCount < minStatsCount {
+			return nil
+		}
+		return updateAggsForIP(tx, ip, entry, currentCount)
 	})
 }
 
@@ -384,6 +488,29 @@ func topAggItems(m map[string]uint64, limit int) []statsAggItem {
 		out = out[:limit]
 	}
 	return out
+}
+
+func readAggs() (map[string]uint64, map[string]uint64, error) {
+	countryAgg := make(map[string]uint64)
+	cityAgg := make(map[string]uint64)
+	err := db.View(func(tx *bbolt.Tx) error {
+		cb := tx.Bucket([]byte(countryAggBucket))
+		if cb != nil {
+			_ = cb.ForEach(func(k, v []byte) error {
+				countryAgg[string(k)] = btoi(v)
+				return nil
+			})
+		}
+		ct := tx.Bucket([]byte(cityAggBucket))
+		if ct != nil {
+			_ = ct.ForEach(func(k, v []byte) error {
+				cityAgg[string(k)] = btoi(v)
+				return nil
+			})
+		}
+		return nil
+	})
+	return countryAgg, cityAgg, err
 }
 
 func isCLIUserAgent(userAgent string) bool {
@@ -672,15 +799,10 @@ func readGeoCache(ip string) (string, string, string, string, string, bool) {
 	var entry persistedGeoEntry
 	found := false
 	if err := db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(geoCacheBucketName))
-		raw := b.Get([]byte(ip))
-		if len(raw) == 0 {
-			return nil
+		if e, ok := readGeoCacheFromTx(tx, ip); ok {
+			entry = e
+			found = true
 		}
-		if err := json.Unmarshal(raw, &entry); err != nil {
-			return nil
-		}
-		found = true
 		return nil
 	}); err != nil {
 		return "", "", "", "", "", false
@@ -726,6 +848,22 @@ func writeGeoCache(ip, country, code, city, asn, asnName string) {
 		b := tx.Bucket([]byte(geoCacheBucketName))
 		return b.Put([]byte(ip), raw)
 	})
+}
+
+func readGeoCacheFromTx(tx *bbolt.Tx, ip string) (persistedGeoEntry, bool) {
+	b := tx.Bucket([]byte(geoCacheBucketName))
+	if b == nil {
+		return persistedGeoEntry{}, false
+	}
+	raw := b.Get([]byte(ip))
+	if len(raw) == 0 {
+		return persistedGeoEntry{}, false
+	}
+	var entry persistedGeoEntry
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return persistedGeoEntry{}, false
+	}
+	return entry, true
 }
 
 func clientIP(r *http.Request) string {
