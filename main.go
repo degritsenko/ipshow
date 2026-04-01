@@ -122,7 +122,7 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/stats" {
-			showStatsHTML(w, r)
+			http.Redirect(w, r, "/", http.StatusFound)
 			return
 		}
 
@@ -139,8 +139,25 @@ func main() {
 			fmt.Fprintf(w, "%s\n", ip)
 		} else {
 			country, _, city, _, _ := lookupGeoCached(ip)
+			totalReq, totalIPs, cliReq, browserReq, statsSince, err := readBasicStats()
+			if err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				log.Printf("read basic stats error: %v", err)
+				return
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprintf(w, htmlTemplate, ip, fallback(country, "unknown"), fallback(city, "unknown"))
+			fmt.Fprintf(
+				w,
+				htmlTemplate,
+				ip,
+				fallback(country, "unknown"),
+				fallback(city, "unknown"),
+				totalReq,
+				totalIPs,
+				cliReq,
+				browserReq,
+				statsSince,
+			)
 		}
 	})
 
@@ -331,6 +348,16 @@ func incrementIPStat(ip string, isCLI bool) error {
 		}
 
 		reqBucket := tx.Bucket([]byte(reqStatsBucketName))
+		if count == 0 {
+			uniqueIPs := uint64(0)
+			if v := reqBucket.Get([]byte("unique_ips")); v != nil {
+				uniqueIPs = btoi(v)
+			}
+			if err := reqBucket.Put([]byte("unique_ips"), itob(uniqueIPs+1)); err != nil {
+				return err
+			}
+		}
+
 		key := []byte("browser")
 		if isCLI {
 			key = []byte("cli")
@@ -468,6 +495,49 @@ func readStatsSince() (string, error) {
 		return "n/a", nil
 	}
 	return time.Unix(int64(since), 0).UTC().Format("2006-01-02 15:04 UTC"), nil
+}
+
+func readBasicStats() (uint64, int, uint64, uint64, string, error) {
+	var cliReq uint64
+	var browserReq uint64
+	var uniqueIPs uint64
+	var since uint64
+
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(reqStatsBucketName))
+		if v := b.Get([]byte("cli")); v != nil {
+			cliReq = btoi(v)
+		}
+		if v := b.Get([]byte("browser")); v != nil {
+			browserReq = btoi(v)
+		}
+		if v := b.Get([]byte("unique_ips")); v != nil {
+			uniqueIPs = btoi(v)
+		}
+		if v := b.Get([]byte("stats_since_unix")); v != nil {
+			since = btoi(v)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, 0, 0, "", err
+	}
+
+	// Backward compatibility for old DBs before unique counter existed.
+	if uniqueIPs == 0 {
+		lines, _, err := loadStatsLines()
+		if err == nil {
+			uniqueIPs = uint64(len(lines))
+		}
+	}
+
+	statsSince := "n/a"
+	if since > 0 {
+		statsSince = time.Unix(int64(since), 0).UTC().Format("2006-01-02 15:04 UTC")
+	}
+
+	totalReq := cliReq + browserReq
+	return totalReq, int(uniqueIPs), cliReq, browserReq, statsSince, nil
 }
 
 func topAggItems(m map[string]uint64, limit int) []statsAggItem {
@@ -1010,6 +1080,7 @@ const htmlTemplate = `
         h1 {font-weight: normal; font-size: 1.1rem; color: #888; margin-bottom: 5px;}
         .ip {font-size: clamp(1.5rem, 8vw, 2.5rem); font-weight: bold; color: #222; margin-bottom: 10px;}
         .location {font-size: 1.1rem; color: #666;}
+        .stats {margin-top: 18px; text-align: left; display: inline-block; color: #444; font-size: 0.95rem; line-height: 1.55;}
     </style>
 </head>
 <body>
@@ -1017,6 +1088,13 @@ const htmlTemplate = `
         <h1>Your IP address</h1>
         <div class="ip">%s</div>
         <div class="location">%s, %s</div>
+        <div class="stats">
+            <div>Total requests: %d</div>
+            <div>Total IPs: %d</div>
+            <div>CLI requests: %d</div>
+            <div>Browser requests: %d</div>
+            <div>Stats since: %s</div>
+        </div>
     </div>
 </body>
 </html>`
