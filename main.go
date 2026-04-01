@@ -655,15 +655,12 @@ const htmlTemplate = `
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IP Check</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap');
-
         :root {
-            --bg-1: #f4efe6;
-            --bg-2: #dbe7f3;
-            --ink: #1a1f24;
-            --muted: #596673;
-            --panel: rgba(255, 255, 255, 0.72);
-            --line: rgba(26, 31, 36, 0.1);
+            --bg: #f5f5f5;
+            --panel: #ffffff;
+            --ink: #121212;
+            --muted: #666666;
+            --line: #e6e6e6;
         }
 
         * { box-sizing: border-box; }
@@ -673,12 +670,9 @@ const htmlTemplate = `
             min-height: 100vh;
             display: grid;
             place-items: center;
-            background:
-                radial-gradient(1200px 700px at 80%% -10%%, #ffd3a5 0%%, transparent 55%%),
-                radial-gradient(900px 500px at -10%% 100%%, #9fc4e3 0%%, transparent 60%%),
-                linear-gradient(135deg, var(--bg-1), var(--bg-2));
+            background: var(--bg);
             color: var(--ink);
-            font-family: "Space Grotesk", "Segoe UI", "Trebuchet MS", sans-serif;
+            font-family: "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             padding: 24px;
         }
 
@@ -686,66 +680,65 @@ const htmlTemplate = `
             width: min(760px, 100%%);
             border: 1px solid var(--line);
             background: var(--panel);
-            backdrop-filter: blur(10px);
-            border-radius: 24px;
-            box-shadow: 0 24px 70px rgba(12, 28, 45, 0.14);
-            padding: 28px;
+            border-radius: 14px;
+            padding: 24px;
         }
 
         .label {
-            font-size: 0.92rem;
-            letter-spacing: 0.08em;
+            font-size: 0.82rem;
+            letter-spacing: 0.04em;
             text-transform: uppercase;
             color: var(--muted);
-            margin-bottom: 8px;
+            margin-bottom: 10px;
         }
 
         .ip {
             margin: 0;
-            font-size: clamp(2rem, 7vw, 4rem);
+            font-size: clamp(2rem, 6vw, 3.5rem);
             font-weight: 700;
             line-height: 1.05;
             word-break: break-word;
         }
 
         .location {
-            margin-top: 12px;
-            font-size: clamp(1.05rem, 2vw, 1.35rem);
-            color: #2f3a45;
+            margin-top: 10px;
+            font-size: 1.12rem;
+            color: var(--muted);
         }
 
         .stats {
-            margin-top: 24px;
+            margin-top: 22px;
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
+            gap: 8px;
         }
 
         .stat {
             border: 1px solid var(--line);
-            background: rgba(255, 255, 255, 0.8);
-            border-radius: 14px;
-            padding: 11px 12px;
+            background: #fafafa;
+            border-radius: 10px;
+            padding: 10px 12px;
         }
 
         .stat .k {
-            font-size: 0.78rem;
+            font-size: 0.74rem;
             letter-spacing: 0.04em;
             text-transform: uppercase;
             color: var(--muted);
-            margin-bottom: 4px;
+            margin-bottom: 5px;
         }
 
         .stat .v {
-            font-size: 1.1rem;
-            font-weight: 600;
+            font-size: 1.02rem;
+            font-weight: 700;
             color: var(--ink);
         }
 
         @media (max-width: 640px) {
-            .container { padding: 20px; border-radius: 18px; }
+            body { padding: 14px; }
+            .container { padding: 18px; border-radius: 12px; }
             .stats { grid-template-columns: 1fr; }
-            .stat .v { font-size: 1.05rem; }
+            .location { font-size: 1rem; }
         }
     </style>
 </head>
