@@ -655,90 +655,78 @@ const htmlTemplate = `
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IP Check</title>
     <style>
-        :root {
-            --bg: #f5f5f5;
-            --panel: #ffffff;
-            --ink: #121212;
-            --muted: #666666;
-            --line: #e6e6e6;
-        }
-
-        * { box-sizing: border-box; }
-
         body {
             margin: 0;
             min-height: 100vh;
-            display: grid;
-            place-items: center;
-            background: var(--bg);
-            color: var(--ink);
-            font-family: "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            padding: 24px;
+            background: #ffffff;
+            color: #111111;
+            font-family: "SF Mono", "Menlo", "Consolas", "Liberation Mono", monospace;
+            padding: 32px 20px;
         }
 
         .container {
             width: min(760px, 100%%);
-            border: 1px solid var(--line);
-            background: var(--panel);
-            border-radius: 14px;
-            padding: 24px;
+            margin: 0 auto;
+            border: 2px solid #111111;
+            padding: 18px;
         }
 
         .label {
-            font-size: 0.82rem;
-            letter-spacing: 0.04em;
+            font-size: 0.78rem;
+            letter-spacing: 0.06em;
             text-transform: uppercase;
-            color: var(--muted);
-            margin-bottom: 10px;
+            color: #555555;
+            margin-bottom: 8px;
         }
 
         .ip {
             margin: 0;
-            font-size: clamp(2rem, 6vw, 3.5rem);
+            font-size: clamp(1.8rem, 5.4vw, 3.2rem);
             font-weight: 700;
-            line-height: 1.05;
+            line-height: 1.1;
             word-break: break-word;
         }
 
         .location {
-            margin-top: 10px;
-            font-size: 1.12rem;
-            color: var(--muted);
+            margin-top: 8px;
+            font-size: 1rem;
+            color: #333333;
         }
 
         .stats {
-            margin-top: 22px;
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
+            margin-top: 14px;
+            border-top: 1px solid #111111;
+            padding-top: 10px;
         }
 
         .stat {
-            border: 1px solid var(--line);
-            background: #fafafa;
-            border-radius: 10px;
-            padding: 10px 12px;
+            display: grid;
+            grid-template-columns: 190px 1fr;
+            gap: 12px;
+            padding: 4px 0;
+            border-bottom: 1px dotted #d4d4d4;
         }
 
-        .stat .k {
-            font-size: 0.74rem;
-            letter-spacing: 0.04em;
+        .stat:last-child {
+            border-bottom: 0;
+        }
+
+        .k {
+            color: #555555;
             text-transform: uppercase;
-            color: var(--muted);
-            margin-bottom: 5px;
+            letter-spacing: 0.03em;
+            font-size: 0.78rem;
         }
 
-        .stat .v {
-            font-size: 1.02rem;
-            font-weight: 700;
-            color: var(--ink);
+        .v {
+            color: #111111;
+            font-size: 0.98rem;
         }
 
         @media (max-width: 640px) {
             body { padding: 14px; }
-            .container { padding: 18px; border-radius: 12px; }
-            .stats { grid-template-columns: 1fr; }
-            .location { font-size: 1rem; }
+            .container { padding: 14px; }
+            .stat { grid-template-columns: 1fr; gap: 2px; padding: 8px 0; }
         }
     </style>
 </head>
@@ -749,24 +737,19 @@ const htmlTemplate = `
         <div class="location">%s, %s</div>
         <div class="stats">
             <div class="stat">
-                <div class="k">Total Requests</div>
-                <div class="v">%d</div>
+                <div class="k">Total requests</div><div class="v">%d</div>
             </div>
             <div class="stat">
-                <div class="k">Total IPs</div>
-                <div class="v">%d</div>
+                <div class="k">Total IPs</div><div class="v">%d</div>
             </div>
             <div class="stat">
-                <div class="k">CLI Requests</div>
-                <div class="v">%d</div>
+                <div class="k">CLI requests</div><div class="v">%d</div>
             </div>
             <div class="stat">
-                <div class="k">Browser Requests</div>
-                <div class="v">%d</div>
+                <div class="k">Browser requests</div><div class="v">%d</div>
             </div>
-            <div class="stat" style="grid-column: 1 / -1;">
-                <div class="k">Stats Since</div>
-                <div class="v">%s</div>
+            <div class="stat">
+                <div class="k">Stats since</div><div class="v">%s</div>
             </div>
         </div>
     </div>
