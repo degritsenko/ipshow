@@ -5,15 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"go.etcd.io/bbolt"
-	"html/template"
 	"log"
-	"math"
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,9 +22,6 @@ const (
 	ipStatsBucketName  = "IPStats"
 	geoCacheBucketName = "GeoCache"
 	reqStatsBucketName = "RequestStats"
-	countryAggBucket   = "CountryAgg"
-	cityAggBucket      = "CityAgg"
-	ipAggAccounted     = "IPAggAccounted"
 
 	geoSuccessCacheTTL = 14 * 24 * time.Hour
 	geoFailureCacheTTL = 60 * time.Minute
@@ -36,11 +29,7 @@ const (
 	geoRefreshTopN     = 500
 	geoRefreshPause    = 75 * time.Millisecond
 
-	defaultPage     = 1
-	defaultPageSize = 200
-	maxPageSize     = 1000
-	defaultSort     = "count_desc"
-	minStatsCount   = 3
+	defaultSort = "count_desc"
 )
 
 func itob(v uint64) []byte {
@@ -55,39 +44,6 @@ func btoi(v []byte) uint64 {
 type ipStatLine struct {
 	ip    string
 	count uint64
-}
-
-type statsItem struct {
-	IP      string `json:"ip"`
-	Country string `json:"country"`
-	City    string `json:"city"`
-	ASN     string `json:"asn"`
-	ASName  string `json:"as_name"`
-	Count   uint64 `json:"count"`
-}
-
-type statsAggItem struct {
-	Name  string
-	Count uint64
-}
-
-type statsHTMLPageData struct {
-	TotalRequests uint64
-	TotalIPs      int
-	CLIRequests   uint64
-	BrowserReqs   uint64
-	StatsSince    string
-	Page          int
-	PageSize      int
-	TotalPages    int
-	Sort          string
-	Items         []statsItem
-	TopCountries  []statsAggItem
-	TopCities     []statsAggItem
-	HasPrev       bool
-	HasNext       bool
-	PrevURL       string
-	NextURL       string
 }
 
 func main() {
@@ -108,21 +64,14 @@ func main() {
 		if _, err := tx.CreateBucketIfNotExists([]byte(reqStatsBucketName)); err != nil {
 			return err
 		}
-		if _, err := tx.CreateBucketIfNotExists([]byte(countryAggBucket)); err != nil {
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists([]byte(cityAggBucket)); err != nil {
-			return err
-		}
-		_, err := tx.CreateBucketIfNotExists([]byte(ipAggAccounted))
-		return err
+		return nil
 	}); err != nil {
 		log.Fatal(err)
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/stats" {
-			http.Redirect(w, r, "/", http.StatusFound)
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
 			return
 		}
 
@@ -202,115 +151,10 @@ func refreshGeoCacheTopIPs() {
 	for i := 0; i < limit; i++ {
 		ip := lines[i].ip
 		_, _, _, _, _ = lookupGeoCached(ip)
-		_ = ensureAggAccounted(ip)
 		updated++
 		time.Sleep(geoRefreshPause)
 	}
 	log.Printf("geo refresh: processed %d IPs", updated)
-}
-
-func showStatsHTML(w http.ResponseWriter, r *http.Request) {
-	page, pageSize := parsePageParams(r)
-	sortBy := parseSortParam(r)
-
-	lines, total, err := loadStatsLines()
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		log.Printf("db view error: %v", err)
-		return
-	}
-
-	filtered := make([]ipStatLine, 0, len(lines))
-	for _, line := range lines {
-		if line.count >= minStatsCount {
-			filtered = append(filtered, line)
-		}
-	}
-
-	sortStatsLines(filtered, sortBy)
-	page, start, end, totalPages := pageWindow(len(filtered), page, pageSize)
-
-	countryAgg, cityAgg, err := readAggs()
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		log.Printf("db agg error: %v", err)
-		return
-	}
-	items := make([]statsItem, 0, end-start)
-	for idx, line := range filtered {
-		country, _, city, asn, asnName, ok := readGeoCache(line.ip)
-		if !ok {
-			country, city, asn, asnName = "", "", "", ""
-		}
-		if idx < start || idx >= end {
-			continue
-		}
-		items = append(items, statsItem{
-			IP:      line.ip,
-			Country: fallback(country, "unknown"),
-			City:    fallback(city, "unknown"),
-			ASN:     fallback(asn, "--"),
-			ASName:  fallback(asnName, "unknown"),
-			Count:   line.count,
-		})
-	}
-
-	prevPage := page - 1
-	if prevPage < 1 {
-		prevPage = 1
-	}
-	nextPage := page + 1
-	if nextPage > totalPages {
-		nextPage = totalPages
-	}
-	hasPrev := page > 1
-	hasNext := page < totalPages
-
-	cliReq, browserReq, err := readRequestSourceCounts()
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		log.Printf("db req stats error: %v", err)
-		return
-	}
-	statsSince, err := readStatsSince()
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		log.Printf("db stats since error: %v", err)
-		return
-	}
-
-	data := statsHTMLPageData{
-		TotalRequests: total,
-		TotalIPs:      len(filtered),
-		CLIRequests:   cliReq,
-		BrowserReqs:   browserReq,
-		StatsSince:    statsSince,
-		Page:          page,
-		PageSize:      pageSize,
-		TotalPages:    totalPages,
-		Sort:          sortBy,
-		Items:         items,
-		TopCountries:  topAggItems(countryAgg, 10),
-		TopCities:     topAggItems(cityAgg, 10),
-		HasPrev:       hasPrev,
-		HasNext:       hasNext,
-		PrevURL:       buildStatsURL("/stats", prevPage, pageSize, sortBy),
-		NextURL:       buildStatsURL("/stats", nextPage, pageSize, sortBy),
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := statsHTMLTemplate.Execute(w, data); err != nil {
-		http.Error(w, "template error", http.StatusInternalServerError)
-		log.Printf("stats template error: %v", err)
-	}
-}
-
-func buildStatsURL(path string, page, pageSize int, sortBy string) string {
-	q := url.Values{}
-	q.Set("page", strconv.Itoa(page))
-	q.Set("page_size", strconv.Itoa(pageSize))
-	q.Set("sort", sortBy)
-	return path + "?" + q.Encode()
 }
 
 func loadStatsLines() ([]ipStatLine, uint64, error) {
@@ -375,91 +219,7 @@ func incrementIPStat(ip string, isCLI bool) error {
 				return err
 			}
 		}
-
-		entry, ok := readGeoCacheFromTx(tx, ip)
-		if !ok || !entry.Success {
-			return nil
-		}
-		return updateAggsForIP(tx, ip, entry, newCount)
-	})
-}
-
-func updateAggsForIP(tx *bbolt.Tx, ip string, entry persistedGeoEntry, currentCount uint64) error {
-	if currentCount < minStatsCount {
 		return nil
-	}
-	country := strings.TrimSpace(entry.Country)
-	city := strings.TrimSpace(entry.City)
-	if country == "" && city == "" {
-		return nil
-	}
-
-	acc := tx.Bucket([]byte(ipAggAccounted))
-	if acc == nil {
-		return nil
-	}
-	accounted := acc.Get([]byte(ip)) != nil
-
-	incr := uint64(1)
-	if !accounted {
-		incr = currentCount
-		if err := acc.Put([]byte(ip), []byte{1}); err != nil {
-			return err
-		}
-	}
-
-	if country != "" {
-		if err := addAggCount(tx.Bucket([]byte(countryAggBucket)), country, incr); err != nil {
-			return err
-		}
-	}
-	if city != "" {
-		if err := addAggCount(tx.Bucket([]byte(cityAggBucket)), city, incr); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func addAggCount(b *bbolt.Bucket, key string, incr uint64) error {
-	if b == nil {
-		return nil
-	}
-	cur := uint64(0)
-	if v := b.Get([]byte(key)); v != nil {
-		cur = btoi(v)
-	}
-	return b.Put([]byte(key), itob(cur+incr))
-}
-
-func ensureAggAccounted(ip string) error {
-	return db.Update(func(tx *bbolt.Tx) error {
-		acc := tx.Bucket([]byte(ipAggAccounted))
-		if acc == nil {
-			return nil
-		}
-		if acc.Get([]byte(ip)) != nil {
-			return nil
-		}
-
-		entry, ok := readGeoCacheFromTx(tx, ip)
-		if !ok || !entry.Success {
-			return nil
-		}
-
-		ipBucket := tx.Bucket([]byte(ipStatsBucketName))
-		if ipBucket == nil {
-			return nil
-		}
-		raw := ipBucket.Get([]byte(ip))
-		if raw == nil {
-			return nil
-		}
-		currentCount := btoi(raw)
-		if currentCount < minStatsCount {
-			return nil
-		}
-		return updateAggsForIP(tx, ip, entry, currentCount)
 	})
 }
 
@@ -540,82 +300,9 @@ func readBasicStats() (uint64, int, uint64, uint64, string, error) {
 	return totalReq, int(uniqueIPs), cliReq, browserReq, statsSince, nil
 }
 
-func topAggItems(m map[string]uint64, limit int) []statsAggItem {
-	if len(m) == 0 || limit <= 0 {
-		return nil
-	}
-	out := make([]statsAggItem, 0, len(m))
-	for k, v := range m {
-		out = append(out, statsAggItem{Name: k, Count: v})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count == out[j].Count {
-			return out[i].Name < out[j].Name
-		}
-		return out[i].Count > out[j].Count
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out
-}
-
-func readAggs() (map[string]uint64, map[string]uint64, error) {
-	countryAgg := make(map[string]uint64)
-	cityAgg := make(map[string]uint64)
-	err := db.View(func(tx *bbolt.Tx) error {
-		cb := tx.Bucket([]byte(countryAggBucket))
-		if cb != nil {
-			_ = cb.ForEach(func(k, v []byte) error {
-				countryAgg[string(k)] = btoi(v)
-				return nil
-			})
-		}
-		ct := tx.Bucket([]byte(cityAggBucket))
-		if ct != nil {
-			_ = ct.ForEach(func(k, v []byte) error {
-				cityAgg[string(k)] = btoi(v)
-				return nil
-			})
-		}
-		return nil
-	})
-	return countryAgg, cityAgg, err
-}
-
 func isCLIUserAgent(userAgent string) bool {
 	ua := strings.ToLower(userAgent)
 	return strings.Contains(ua, "curl") || strings.Contains(ua, "wget") || strings.Contains(ua, "httpie")
-}
-
-func parsePageParams(r *http.Request) (int, int) {
-	page := defaultPage
-	pageSize := defaultPageSize
-
-	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
-			page = v
-		}
-	}
-	if raw := strings.TrimSpace(r.URL.Query().Get("page_size")); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
-			pageSize = v
-		}
-	}
-	if pageSize > maxPageSize {
-		pageSize = maxPageSize
-	}
-	return page, pageSize
-}
-
-func parseSortParam(r *http.Request) string {
-	sortBy := strings.TrimSpace(r.URL.Query().Get("sort"))
-	switch sortBy {
-	case "count_asc", "count_desc", "ip_asc", "ip_desc":
-		return sortBy
-	default:
-		return defaultSort
-	}
 }
 
 func sortStatsLines(lines []ipStatLine, sortBy string) {
@@ -639,24 +326,6 @@ func sortStatsLines(lines []ipStatLine, sortBy string) {
 			return lines[i].count > lines[j].count
 		})
 	}
-}
-
-func pageWindow(totalItems, page, pageSize int) (int, int, int, int) {
-	if totalItems == 0 {
-		return defaultPage, 0, 0, 1
-	}
-
-	totalPages := int(math.Ceil(float64(totalItems) / float64(pageSize)))
-	if page > totalPages {
-		page = totalPages
-	}
-
-	start := (page - 1) * pageSize
-	end := start + pageSize
-	if end > totalItems {
-		end = totalItems
-	}
-	return page, start, end, totalPages
 }
 
 type geoService struct {
@@ -977,95 +646,6 @@ func fallback(v, def string) string {
 	}
 	return v
 }
-
-var statsHTMLTemplate = template.Must(template.New("stats").Parse(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stats</title>
-    <style>
-        body {font-family: -apple-system, system-ui, sans-serif; margin: 24px; color: #222; background: #fafafa;}
-        .top {display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 14px;}
-        .badge {padding: 8px 10px; border: 1px solid #ddd; background: #fff; border-radius: 8px;}
-        .actions a {margin-right: 12px;}
-        table {width: 100%; border-collapse: collapse; background: #fff;}
-        th, td {padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; font-size: 14px;}
-        th {background: #f3f3f3;}
-        .pager {margin-top: 12px;}
-        .pager a {margin-right: 12px;}
-    </style>
-</head>
-<body>
-    <h1>IP Stats</h1>
-    <div class="top">
-        <div class="badge">Total requests: {{.TotalRequests}}</div>
-        <div class="badge">Total IPs: {{.TotalIPs}}</div>
-        <div class="badge">CLI requests: {{.CLIRequests}}</div>
-        <div class="badge">Browser requests: {{.BrowserReqs}}</div>
-        <div class="badge">Stats since: {{.StatsSince}}</div>
-        <div class="badge">Page: {{.Page}} / {{.TotalPages}}</div>
-        <div class="badge">Page size: {{.PageSize}}</div>
-    </div>
-    <div class="actions">
-        <a href="/">Back to IP page</a>
-    </div>
-    <table>
-        <thead>
-            <tr>
-                <th>IP</th>
-                <th>Country</th>
-                <th>City</th>
-                <th>ASN</th>
-                <th>AS Name</th>
-                <th>Count</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range .Items}}
-            <tr>
-                <td>{{.IP}}</td>
-                <td>{{.Country}}</td>
-                <td>{{.City}}</td>
-                <td>{{.ASN}}</td>
-                <td>{{.ASName}}</td>
-                <td>{{.Count}}</td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-    <div style="display:flex; gap:24px; margin-top:18px; flex-wrap:wrap;">
-        <div>
-            <h3>Top Countries</h3>
-            <table style="width:320px;">
-                <thead><tr><th>Country</th><th>Requests</th></tr></thead>
-                <tbody>
-                    {{range .TopCountries}}
-                    <tr><td>{{.Name}}</td><td>{{.Count}}</td></tr>
-                    {{end}}
-                </tbody>
-            </table>
-        </div>
-        <div>
-            <h3>Top Cities</h3>
-            <table style="width:320px;">
-                <thead><tr><th>City</th><th>Requests</th></tr></thead>
-                <tbody>
-                    {{range .TopCities}}
-                    <tr><td>{{.Name}}</td><td>{{.Count}}</td></tr>
-                    {{end}}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    <div class="pager">
-        {{if .HasPrev}}<a href="{{.PrevURL}}">Prev</a>{{end}}
-        {{if .HasNext}}<a href="{{.NextURL}}">Next</a>{{end}}
-    </div>
-</body>
-</html>
-`))
 
 const htmlTemplate = `
 <!DOCTYPE html>
