@@ -2,9 +2,6 @@
 
 Simple service that returns your public IP address, keeps visit stats, and shows country/city info in web view.
 
-## Endpoints
-- `/stats` - plain text stats by IP
-
 CLI tools (`curl`, `wget`, `httpie`) get raw IP only.
 
 ## Run with Docker Compose
