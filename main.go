@@ -88,7 +88,7 @@ func main() {
 			fmt.Fprintf(w, "%s\n", ip)
 		} else {
 			country, _, city, _, _ := lookupGeoCached(ip)
-			totalReq, totalIPs, cliReq, browserReq, statsSince, err := readBasicStats()
+			totalReq, _, cliReq, browserReq, statsSince, err := readBasicStats()
 			if err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				log.Printf("read basic stats error: %v", err)
@@ -102,7 +102,6 @@ func main() {
 				fallback(country, "unknown"),
 				fallback(city, "unknown"),
 				totalReq,
-				totalIPs,
 				cliReq,
 				browserReq,
 				statsSince,
@@ -715,7 +714,6 @@ const htmlTemplate = `
         <div class="location">%s, %s</div>
         <div class="sep">---</div>
         <div class="line">Total requests: %d</div>
-        <div class="line">Total IPs: %d</div>
         <div class="line">CLI requests: %d</div>
         <div class="line">Browser requests: %d</div>
         <div class="line">Stats since: %s</div>
