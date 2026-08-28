@@ -706,17 +706,18 @@ const htmlTemplate = `
             margin-top: 18px;
             padding-top: 10px;
             border-top: 1px solid #d4d4d4;
-            font-size: 0.82rem;
+            font-size: 1rem;
         }
 
         .footer a {
-            color: #555555;
-            text-decoration: none;
+            color: #111111;
+            font-weight: 700;
+            text-decoration: underline;
+            text-underline-offset: 3px;
         }
 
         .footer a:hover {
-            color: #111111;
-            text-decoration: underline;
+            color: #555555;
         }
 
         @media (max-width: 640px) {
