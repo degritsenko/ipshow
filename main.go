@@ -734,7 +734,7 @@ const htmlTemplate = `
         <div class="line">CLI requests: %d</div>
         <div class="line">Browser requests: %d</div>
         <div class="line">Stats since: %s</div>
-        <div class="footer"><a href="https://github.com/degritsenko/ipshow" target="_blank" rel="noopener noreferrer">github.com/degritsenko/ipshow</a></div>
+        <div class="footer"><a href="https://github.com/degritsenko/ipshow" target="_blank" rel="noopener noreferrer">GitHub repo</a></div>
     </div>
 </body>
 </html>`
