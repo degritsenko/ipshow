@@ -711,9 +711,7 @@ const htmlTemplate = `
 
         .footer a {
             color: #111111;
-            font-weight: 700;
-            text-decoration: underline;
-            text-underline-offset: 3px;
+            text-decoration: none;
         }
 
         .footer a:hover {
