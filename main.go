@@ -702,6 +702,23 @@ const htmlTemplate = `
             color: #111111;
         }
 
+        .footer {
+            margin-top: 18px;
+            padding-top: 10px;
+            border-top: 1px solid #d4d4d4;
+            font-size: 0.82rem;
+        }
+
+        .footer a {
+            color: #555555;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            color: #111111;
+            text-decoration: underline;
+        }
+
         @media (max-width: 640px) {
             body { padding: 18px 14px; }
         }
@@ -717,6 +734,7 @@ const htmlTemplate = `
         <div class="line">CLI requests: %d</div>
         <div class="line">Browser requests: %d</div>
         <div class="line">Stats since: %s</div>
+        <div class="footer"><a href="https://github.com/degritsenko/ipshow" target="_blank" rel="noopener noreferrer">github.com/degritsenko/ipshow</a></div>
     </div>
 </body>
 </html>`
