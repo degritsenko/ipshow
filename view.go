@@ -10,6 +10,7 @@ var homeTemplate = template.Must(template.New("home").Parse(htmlTemplate))
 
 type homePage struct {
 	IP      string
+	Domain  string
 	Country string
 	City    string
 	Stats   basicStats
@@ -117,7 +118,7 @@ const htmlTemplate = `
         <div class="label">Your IP Address</div>
         <h1 class="ip">{{.IP}}</h1>
         <div class="location">{{.Country}}, {{.City}}</div>
-        <p class="usage">Plain text at <a href="/ip">/ip</a> &amp; JSON at <a href="/json">/json</a>. Use with curl, wget or HTTPie.</p>
+        <p class="usage">Use curl, wget or HTTPie: plain text at <a href="/">{{.Domain}}</a> or <a href="/ip">/ip</a>, JSON at <a href="/json">/json</a>.</p>
         <div class="sep">---</div>
         <div class="line">Total requests: {{.Stats.TotalRequests}}</div>
         <div class="line">Requests today (UTC): {{.Stats.TodayRequests}}</div>

@@ -43,7 +43,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		log.Printf("read basic stats error: %v", err)
 		return
 	}
-	if err := renderHome(w, homePage{IP: ip, Country: fallback(location.Country, "unknown"), City: fallback(location.City, "unknown"), Stats: stats}); err != nil {
+	if err := renderHome(w, homePage{IP: ip, Domain: r.Host, Country: fallback(location.Country, "unknown"), City: fallback(location.City, "unknown"), Stats: stats}); err != nil {
 		log.Printf("render home error: %v", err)
 	}
 }
