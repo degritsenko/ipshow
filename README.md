@@ -4,6 +4,8 @@ Simple service that returns your public IP address, keeps visit stats, and shows
 
 CLI tools (`curl`, `wget`, `httpie`) get raw IP only.
 
+Use `curl http://your-domain/json` for JSON with IP, city, region, country code, coordinates, ASN/organization, postal code, and timezone. Unavailable fields are empty strings.
+
 ## Run with Docker Compose
 ```bash
 docker compose up -d --build
