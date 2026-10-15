@@ -115,6 +115,27 @@ func TestPlainCLIAndUnknownPath(t *testing.T) {
 	}
 }
 
+func TestIPEndpoint(t *testing.T) {
+	setupGeoTest(t)
+	for _, ua := range []string{"curl/8", "Mozilla/5.0", ""} {
+		for _, ip := range []string{"176.195.79.127", "2001:db8::1"} {
+			r := httptest.NewRequest("GET", "/ip", nil)
+			r.RemoteAddr = "127.0.0.1:1234"
+			r.Header.Set("X-Forwarded-For", ip)
+			r.Header.Set("User-Agent", ua)
+			w := httptest.NewRecorder()
+			handleRequest(w, r)
+			if w.Code != 200 || w.Body.String() != ip+"\n" || w.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+				t.Fatalf("ua=%q ip=%q: %d %s", ua, ip, w.Code, w.Body)
+			}
+		}
+	}
+	total, _, cli, jsonCount, browser, _, err := readBasicStats()
+	if err != nil || total != 6 || cli != 6 || jsonCount != 0 || browser != 0 {
+		t.Fatalf("unexpected counts: total=%d cli=%d json=%d browser=%d err=%v", total, cli, jsonCount, browser, err)
+	}
+}
+
 func TestJSONProviderFailureIsCached(t *testing.T) {
 	setupGeoTest(t)
 	calls := 0

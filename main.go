@@ -76,13 +76,13 @@ func main() {
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" && r.URL.Path != "/json" {
+	if r.URL.Path != "/" && r.URL.Path != "/json" && r.URL.Path != "/ip" {
 		http.NotFound(w, r)
 		return
 	}
 
 	ip := clientIP(r)
-	isCLI := isCLIUserAgent(r.Header.Get("User-Agent"))
+	isCLI := r.URL.Path == "/ip" || isCLIUserAgent(r.Header.Get("User-Agent"))
 	if err := incrementIPStat(ip, isCLI, r.URL.Path == "/json"); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		log.Printf("db update error: %v", err)
