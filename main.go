@@ -450,8 +450,8 @@ const htmlTemplate = `
 
         .line {
             margin: 2px 0;
-            font-size: 1rem;
-            color: #111111;
+            font-size: 0.8rem;
+            color: #666666;
         }
 
         .footer {
@@ -462,17 +462,20 @@ const htmlTemplate = `
         }
 
         .usage {
-            margin: 0 0 12px;
-            font-size: 0.85rem;
-            color: #444444;
+            margin: 18px 0 0;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #111111;
         }
 
+        .usage a,
         .footer a {
             color: #111111;
             text-decoration: underline;
             text-underline-offset: 3px;
         }
 
+        .usage a:hover,
         .footer a:hover {
             color: #555555;
         }
@@ -487,6 +490,7 @@ const htmlTemplate = `
         <div class="label">Your IP Address</div>
         <h1 class="ip">%s</h1>
         <div class="location">%s, %s</div>
+        <p class="usage">Plain text at <a href="/ip">/ip</a> &amp; JSON at <a href="/json">/json</a>. Use with curl, wget or HTTPie.</p>
         <div class="sep">---</div>
         <div class="line">Total requests: %d</div>
         <div class="line">CLI requests: %d</div>
@@ -494,7 +498,6 @@ const htmlTemplate = `
         <div class="line">Browser requests: %d</div>
         <div class="line">Stats since: %s</div>
         <div class="footer">
-            <p class="usage">Plain text at <a href="/ip">/ip</a> &amp; JSON at <a href="/json">/json</a>. Use with curl, wget or HTTPie.</p>
             <a href="https://github.com/degritsenko/ipshow" target="_blank" rel="noopener noreferrer">GitHub repo</a>
         </div>
     </div>
