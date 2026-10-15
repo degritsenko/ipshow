@@ -44,14 +44,15 @@ type geoService struct {
 
 // Keep the original fields so existing databases remain readable.
 type persistedGeoEntry struct {
-	Country string   `json:"country"`
-	Code    string   `json:"code"`
-	City    string   `json:"city"`
-	ASN     string   `json:"asn"`
-	ASNName string   `json:"asn_name"`
-	Success bool     `json:"success"`
-	SavedAt int64    `json:"saved_at"`
-	Details *geoData `json:"details,omitempty"`
+	Country    string   `json:"country"`
+	Code       string   `json:"code"`
+	City       string   `json:"city"`
+	ASN        string   `json:"asn"`
+	ASNName    string   `json:"asn_name"`
+	Success    bool     `json:"success"`
+	SavedAt    int64    `json:"saved_at"`
+	RetryAfter int64    `json:"retry_after,omitempty"`
+	Details    *geoData `json:"details,omitempty"`
 }
 
 func newGeoService() *geoService {
@@ -184,11 +185,21 @@ func lookupGeoCached(ip string) (string, string, string, string, string) {
 	return lookupGeoDetailsCached(ip, false).legacy()
 }
 
+func (e persistedGeoEntry) data() geoData {
+	if e.Details != nil {
+		return *e.Details
+	}
+	return geoData{Country: e.Country, Code: e.Code, City: e.City, ASN: e.ASN, ASNName: e.ASNName}
+}
+
 func lookupGeoDetailsCached(ip string, requireDetails bool) geoData {
 	var e persistedGeoEntry
 	found := false
 	_ = db.View(func(tx *bbolt.Tx) error { e, found = readGeoCacheFromTx(tx, ip); return nil })
 	if found {
+		if time.Now().Before(time.Unix(e.RetryAfter, 0)) {
+			return e.data()
+		}
 		ttl := geoFailureCacheTTL
 		if e.Success {
 			ttl = geoSuccessCacheTTL
@@ -206,7 +217,13 @@ func lookupGeoDetailsCached(ip string, requireDetails bool) geoData {
 		}
 	}
 	d := geo.Lookup(ip)
-	e = persistedGeoEntry{Country: d.Country, Code: d.Code, City: d.City, ASN: d.ASN, ASNName: d.ASNName, Success: strings.TrimSpace(d.Country) != "", SavedAt: time.Now().Unix(), Details: &d}
+	if strings.TrimSpace(d.Country) == "" && found && e.Success {
+		// Preserve the last successful lookup and its original age on failure.
+		e.RetryAfter = time.Now().Add(geoFailureCacheTTL).Unix()
+		d = e.data()
+	} else {
+		e = persistedGeoEntry{Country: d.Country, Code: d.Code, City: d.City, ASN: d.ASN, ASNName: d.ASNName, Success: strings.TrimSpace(d.Country) != "", SavedAt: time.Now().Unix(), Details: &d}
+	}
 	if raw, err := json.Marshal(e); err == nil {
 		_ = db.Update(func(tx *bbolt.Tx) error { return tx.Bucket([]byte(geoCacheBucketName)).Put([]byte(ip), raw) })
 	}

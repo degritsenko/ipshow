@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -164,5 +165,74 @@ func TestJSONProviderFailureIsCached(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("failure cache missed: %d upstream calls", calls)
+	}
+}
+
+func TestGeoFailurePreservesLastSuccess(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			setupGeoTest(t)
+			ip := "8.8.8.8"
+			savedAt := time.Now().Add(-geoSuccessCacheTTL - time.Hour).Unix()
+			entry := persistedGeoEntry{Country: "United States", Code: "US", City: "Mountain View", Success: true, SavedAt: savedAt}
+			if legacy {
+				// Even a fresh legacy record needs enrichment for /json.
+				entry.SavedAt = time.Now().Unix()
+			} else {
+				entry.Details = &geoData{Country: entry.Country, Code: entry.Code, City: entry.City, Region: "California", Loc: "37.386,-122.0838", Timezone: "America/Los_Angeles"}
+			}
+			put := func(e persistedGeoEntry) {
+				t.Helper()
+				raw, err := json.Marshal(e)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = db.Update(func(tx *bbolt.Tx) error { return tx.Bucket([]byte(geoCacheBucketName)).Put([]byte(ip), raw) }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			put(entry)
+			calls := 0
+			transport := testTransport(func(*http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: 429, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+			})
+			geo.client.Transport = transport
+			got := lookupGeoDetailsCached(ip, true)
+			if got.Country != entry.Country || got.City != entry.City {
+				t.Fatalf("lost last success: %+v", got)
+			}
+			if !legacy && got.Loc != entry.Details.Loc {
+				t.Fatal("lost extended fields")
+			}
+			var stored persistedGeoEntry
+			if err := db.View(func(tx *bbolt.Tx) error { stored, _ = readGeoCacheFromTx(tx, ip); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if !stored.Success || stored.SavedAt != entry.SavedAt {
+				t.Fatalf("last success overwritten: %+v", stored)
+			}
+			if calls != 3 {
+				t.Fatalf("want fallback chain, calls=%d", calls)
+			}
+			// Retry suppression must survive an application restart.
+			geo = newGeoService()
+			geo.client.Transport = transport
+			if got := lookupGeoDetailsCached(ip, true); got.City != entry.City {
+				t.Fatal(got)
+			}
+			if calls != 3 {
+				t.Fatal("repeated failed lookup after restart")
+			}
+			stored.RetryAfter = time.Now().Add(-time.Second).Unix()
+			put(stored)
+			geo.client.Transport = testTransport(func(*http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"success":true,"country":"United States","country_code":"US","city":"New York"}`))}, nil
+			})
+			if got := lookupGeoDetailsCached(ip, true); got.City != "New York" {
+				t.Fatalf("retry failed: %+v", got)
+			}
+		})
 	}
 }

@@ -74,3 +74,30 @@ func TestProxyDNSRefreshAndFailure(t *testing.T) {
 		t.Fatal("trusted proxy after DNS failure")
 	}
 }
+
+func TestProxyAddressChangeBeforeCacheExpires(t *testing.T) {
+	p := newProxyTrust()
+	old := netip.MustParseAddr("172.20.0.2")
+	current := old
+	calls := 0
+	p.lookup = func(context.Context, string, string) ([]netip.Addr, error) {
+		calls++
+		return []netip.Addr{current}, nil
+	}
+	if !p.contains(old) {
+		t.Fatal("initial proxy rejected")
+	}
+	current = netip.MustParseAddr("172.20.0.4")
+	if !p.contains(current) {
+		t.Fatal("replacement proxy rejected with valid DNS cache")
+	}
+	if p.contains(old) {
+		t.Fatal("old proxy still trusted")
+	}
+	if p.contains(netip.MustParseAddr("172.20.0.9")) {
+		t.Fatal("unrelated peer trusted")
+	}
+	if calls != 2 {
+		t.Fatalf("unexpected DNS queries: %d", calls)
+	}
+}
