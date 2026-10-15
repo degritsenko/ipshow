@@ -36,14 +36,14 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, ip)
 		return
 	}
-	location := lookupGeoDetailsCached(ip, false)
+	location := lookupGeoDetailsCached(ip, true)
 	stats, err := readBasicStats()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		log.Printf("read basic stats error: %v", err)
 		return
 	}
-	if err := renderHome(w, homePage{IP: ip, Domain: r.Host, Country: fallback(location.Country, "unknown"), City: fallback(location.City, "unknown"), Stats: stats}); err != nil {
+	if err := renderHome(w, homePage{IP: ip, Domain: r.Host, Country: fallback(location.Country, "unknown"), City: fallback(location.City, "unknown"), Location: location, Stats: stats}); err != nil {
 		log.Printf("render home error: %v", err)
 	}
 }
@@ -60,22 +60,27 @@ func fallback(v, def string) string {
 	return v
 }
 
-func serveJSON(w http.ResponseWriter, ip string) {
-	d := lookupGeoDetailsCached(ip, true)
-	result := struct {
-		IP       string `json:"ip"`
-		City     string `json:"city"`
-		Region   string `json:"region"`
-		Country  string `json:"country"`
-		Loc      string `json:"loc"`
-		Org      string `json:"org"`
-		Postal   string `json:"postal"`
-		Timezone string `json:"timezone"`
-	}{
+type ipInfo struct {
+	IP       string `json:"ip"`
+	City     string `json:"city"`
+	Region   string `json:"region"`
+	Country  string `json:"country"`
+	Loc      string `json:"loc"`
+	Org      string `json:"org"`
+	Postal   string `json:"postal"`
+	Timezone string `json:"timezone"`
+}
+
+func makeIPInfo(ip string, d geoData) ipInfo {
+	return ipInfo{
 		IP: ip, City: d.City, Region: d.Region, Country: d.Code,
 		Loc: d.Loc, Org: strings.TrimSpace(d.ASN + " " + d.ASNName),
 		Postal: d.Postal, Timezone: d.Timezone,
 	}
+}
+
+func serveJSON(w http.ResponseWriter, ip string) {
+	result := makeIPInfo(ip, lookupGeoDetailsCached(ip, true))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

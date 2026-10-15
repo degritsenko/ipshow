@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"html/template"
 	"net/http"
 )
@@ -9,11 +10,17 @@ import (
 var homeTemplate = template.Must(template.New("home").Parse(htmlTemplate))
 
 type homePage struct {
-	IP      string
-	Domain  string
-	Country string
-	City    string
-	Stats   basicStats
+	IP       string
+	Domain   string
+	Country  string
+	City     string
+	Location geoData
+	Stats    basicStats
+}
+
+func (p homePage) JSONPreview() (string, error) {
+	raw, err := json.MarshalIndent(makeIPInfo(p.IP, p.Location), "", "  ")
+	return string(raw), err
 }
 
 func renderHome(w http.ResponseWriter, page homePage) error {
@@ -89,27 +96,64 @@ const htmlTemplate = `
             font-size: 1rem;
         }
 
-        .usage {
-            margin: 18px 0 0;
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: #111111;
+        .cli {
+            margin-top: 28px;
         }
 
-        .usage a,
+        .cli h2 {
+            margin: 0;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .cli-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-size: 0.82rem;
+        }
+
+        .cli-table th {
+            text-align: left;
+            font-weight: 400;
+            color: #666666;
+        }
+
+        .cli-table th,
+        .cli-table td {
+            padding: 10px 0;
+            vertical-align: top;
+            overflow-wrap: anywhere;
+        }
+
+        .cli-table td {
+            border-top: 1px solid #d4d4d4;
+        }
+
+        .cli-table th:first-child { width: 43%; }
+        .cli-table .arrow { width: 30px; color: #888888; text-align: center; }
+        .cli-table code,
+        .cli-table pre { font: inherit; }
+        .cli-table pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+        .cli a,
         .footer a {
             color: #111111;
             text-decoration: underline;
             text-underline-offset: 3px;
         }
 
-        .usage a:hover,
+        .cli a:hover,
         .footer a:hover {
             color: #555555;
         }
 
         @media (max-width: 640px) {
             body { padding: 18px 14px; }
+            .cli-table, .cli-table tbody, .cli-table tr, .cli-table td { display: block; }
+            .cli-table thead, .cli-table .arrow { display: none; }
+            .cli-table td:first-child { padding-bottom: 6px; }
+            .cli-table td:last-child { border-top: 0; padding: 0 0 12px; color: #444444; }
         }
     </style>
 </head>
@@ -118,7 +162,17 @@ const htmlTemplate = `
         <div class="label">Your IP Address</div>
         <h1 class="ip">{{.IP}}</h1>
         <div class="location">{{.Country}}, {{.City}}</div>
-        <p class="usage">Use curl, wget or HTTPie: plain text at <a href="/">{{.Domain}}</a> or <a href="/ip">/ip</a>, JSON at <a href="/json">/json</a>.</p>
+        <section class="cli" aria-labelledby="cli-title">
+            <h2 id="cli-title">Command Line Interface</h2>
+            <table class="cli-table" aria-labelledby="cli-title">
+                <thead><tr><th scope="col">Command</th><th class="arrow" aria-hidden="true"></th><th scope="col">Output</th></tr></thead>
+                <tbody>
+                    <tr><td><code>curl <a href="/">{{.Domain}}</a></code></td><td class="arrow" aria-hidden="true">&rarr;</td><td><code>{{.IP}}</code></td></tr>
+                    <tr><td><code>curl {{.Domain}}<a href="/ip">/ip</a></code></td><td class="arrow" aria-hidden="true">&rarr;</td><td><code>{{.IP}}</code></td></tr>
+                    <tr><td><code>curl {{.Domain}}<a href="/json">/json</a></code></td><td class="arrow" aria-hidden="true">&rarr;</td><td><pre>{{.JSONPreview}}</pre></td></tr>
+                </tbody>
+            </table>
+        </section>
         <div class="sep">---</div>
         <div class="line">Total requests: {{.Stats.TotalRequests}}</div>
         <div class="line">Requests today (UTC): {{.Stats.TodayRequests}}</div>
