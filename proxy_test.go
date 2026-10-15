@@ -101,3 +101,34 @@ func TestProxyAddressChangeBeforeCacheExpires(t *testing.T) {
 		t.Fatalf("unexpected DNS queries: %d", calls)
 	}
 }
+
+func TestKnownProxyDoesNotWaitForUnknownPeerDNS(t *testing.T) {
+	p := newProxyTrust()
+	trusted := netip.MustParseAddr("172.20.0.2")
+	p.addresses = []netip.Addr{trusted}
+	p.expires = time.Now().Add(time.Minute)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	p.lookup = func(context.Context, string, string) ([]netip.Addr, error) {
+		close(started)
+		<-release
+		return []netip.Addr{trusted}, nil
+	}
+	unknownDone := make(chan bool, 1)
+	go func() { unknownDone <- p.contains(netip.MustParseAddr("172.20.0.9")) }()
+	<-started
+	knownDone := make(chan bool, 1)
+	go func() { knownDone <- p.contains(trusted) }()
+	select {
+	case trusted := <-knownDone:
+		if !trusted {
+			t.Error("known proxy rejected")
+		}
+	case <-time.After(time.Second):
+		t.Error("known proxy blocked by unrelated DNS lookup")
+	}
+	close(release)
+	if <-unknownDone {
+		t.Error("unknown peer trusted")
+	}
+}

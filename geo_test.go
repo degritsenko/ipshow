@@ -139,9 +139,9 @@ func TestIPEndpoint(t *testing.T) {
 			}
 		}
 	}
-	total, _, _, cli, jsonCount, browser, _, err := readBasicStats()
-	if err != nil || total != 6 || cli != 6 || jsonCount != 0 || browser != 0 {
-		t.Fatalf("unexpected counts: total=%d cli=%d json=%d browser=%d err=%v", total, cli, jsonCount, browser, err)
+	stats, err := readBasicStats()
+	if err != nil || stats.TotalRequests != 6 || stats.CLIRequests != 6 || stats.JSONRequests != 0 || stats.BrowserRequests != 0 {
+		t.Fatalf("unexpected counts: %+v err=%v", stats, err)
 	}
 }
 

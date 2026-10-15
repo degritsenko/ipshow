@@ -41,15 +41,15 @@ func TestJSONRequestCounts(t *testing.T) {
 			}
 		}
 	}
-	total, today, _, cli, jsonCount, browser, _, err := readBasicStats()
+	stats, err := readBasicStats()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 34 || cli != 11 || jsonCount != 2 || browser != 21 {
-		t.Fatalf("unexpected counts: total=%d cli=%d json=%d browser=%d", total, cli, jsonCount, browser)
+	if stats.TotalRequests != 34 || stats.CLIRequests != 11 || stats.JSONRequests != 2 || stats.BrowserRequests != 21 {
+		t.Fatalf("unexpected counts: %+v", stats)
 	}
-	if today != 4 {
-		t.Fatalf("today=%d, want 4 (historical requests must not be backfilled)", today)
+	if stats.TodayRequests != 4 {
+		t.Fatalf("today=%d, want 4 (historical requests must not be backfilled)", stats.TodayRequests)
 	}
 }
 
@@ -65,7 +65,14 @@ func TestDailyRequestsAcrossUTCMidnightAndReopen(t *testing.T) {
 		{before, false, true},
 		{after.In(time.FixedZone("MSK", 3*60*60)), false, false},
 	} {
-		if err := incrementIPStatAt("127.0.0.1", request.cli, request.json, request.at); err != nil {
+		kind := browserRequest
+		if request.cli {
+			kind = cliRequest
+		}
+		if request.json {
+			kind = jsonRequest
+		}
+		if err := recordRequest("127.0.0.1", kind, request.at); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -92,5 +99,17 @@ func TestDailyRequestsAcrossUTCMidnightAndReopen(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	for _, want := range []struct {
+		at    time.Time
+		count uint64
+	}{{before, 2}, {after, 1}, {after.Add(24 * time.Hour), 0}} {
+		stats, err := readBasicStatsAt(want.at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.TotalRequests != 3 || stats.TodayRequests != want.count {
+			t.Errorf("%s: unexpected stats %+v", want.at, stats)
+		}
 	}
 }
