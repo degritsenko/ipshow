@@ -461,6 +461,12 @@ const htmlTemplate = `
             font-size: 1rem;
         }
 
+        .usage {
+            margin: 0 0 12px;
+            font-size: 0.85rem;
+            color: #444444;
+        }
+
         .footer a {
             color: #111111;
             text-decoration: underline;
@@ -487,7 +493,10 @@ const htmlTemplate = `
         <div class="line">JSON requests: %d</div>
         <div class="line">Browser requests: %d</div>
         <div class="line">Stats since: %s</div>
-        <div class="footer"><a href="https://github.com/degritsenko/ipshow" target="_blank" rel="noopener noreferrer">GitHub repo</a></div>
+        <div class="footer">
+            <p class="usage">Plain text at <a href="/ip">/ip</a> &amp; JSON at <a href="/json">/json</a>. Use with curl, wget or HTTPie.</p>
+            <a href="https://github.com/degritsenko/ipshow" target="_blank" rel="noopener noreferrer">GitHub repo</a>
+        </div>
     </div>
 </body>
 </html>`
