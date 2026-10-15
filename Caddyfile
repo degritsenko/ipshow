@@ -5,10 +5,16 @@ http://gritsenko.me {
     }
 
     handle {
-        reverse_proxy ipshow:8080
+        reverse_proxy ipshow:8080 {
+            header_up X-Forwarded-For {remote_host}
+            header_up -X-Real-IP
+        }
     }
 }
 
 https://gritsenko.me {
-    reverse_proxy ipshow:8080
+    reverse_proxy ipshow:8080 {
+        header_up X-Forwarded-For {remote_host}
+        header_up -X-Real-IP
+    }
 }

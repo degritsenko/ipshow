@@ -72,7 +72,17 @@ func main() {
 	startGeoRefreshWorker()
 
 	log.Println("Running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Fatal(newHTTPServer().ListenAndServe())
+}
+
+func newHTTPServer() *http.Server {
+	return &http.Server{
+		Addr:              ":8080",
+		ReadHeaderTimeout: 3 * time.Second,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +109,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "%s\n", ip)
 	} else {
 		country, _, city, _, _ := lookupGeoCached(ip)
-		totalReq, _, cliReq, jsonReq, browserReq, statsSince, err := readBasicStats()
+		totalReq, todayReq, _, cliReq, jsonReq, browserReq, statsSince, err := readBasicStats()
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			log.Printf("read basic stats error: %v", err)
@@ -113,6 +123,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 			fallback(country, "unknown"),
 			fallback(city, "unknown"),
 			totalReq,
+			todayReq,
 			cliReq,
 			jsonReq,
 			browserReq,
@@ -185,6 +196,14 @@ func loadStatsLines() ([]ipStatLine, uint64, error) {
 }
 
 func incrementIPStat(ip string, isCLI, isJSON bool) error {
+	return incrementIPStatAt(ip, isCLI, isJSON, time.Now())
+}
+
+func dailyRequestsKey(now time.Time) []byte {
+	return []byte("daily:" + now.UTC().Format("2006-01-02"))
+}
+
+func incrementIPStatAt(ip string, isCLI, isJSON bool, now time.Time) error {
 	return db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(ipStatsBucketName))
 		count := uint64(0)
@@ -221,9 +240,17 @@ func incrementIPStat(ip string, isCLI, isJSON bool) error {
 		if err := reqBucket.Put(key, itob(reqCount+1)); err != nil {
 			return err
 		}
+		dailyKey := dailyRequestsKey(now)
+		var dailyCount uint64
+		if v := reqBucket.Get(dailyKey); v != nil {
+			dailyCount = btoi(v)
+		}
+		if err := reqBucket.Put(dailyKey, itob(dailyCount+1)); err != nil {
+			return err
+		}
 
 		if v := reqBucket.Get([]byte("stats_since_unix")); v == nil {
-			if err := reqBucket.Put([]byte("stats_since_unix"), itob(uint64(time.Now().Unix()))); err != nil {
+			if err := reqBucket.Put([]byte("stats_since_unix"), itob(uint64(now.Unix()))); err != nil {
 				return err
 			}
 		}
@@ -265,7 +292,8 @@ func readStatsSince() (string, error) {
 	return time.Unix(int64(since), 0).UTC().Format("2006-01-02 15:04 UTC"), nil
 }
 
-func readBasicStats() (uint64, int, uint64, uint64, uint64, string, error) {
+func readBasicStats() (uint64, uint64, int, uint64, uint64, uint64, string, error) {
+	var todayReq uint64
 	var cliReq uint64
 	var jsonReq uint64
 	var browserReq uint64
@@ -274,6 +302,9 @@ func readBasicStats() (uint64, int, uint64, uint64, uint64, string, error) {
 
 	err := db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(reqStatsBucketName))
+		if v := b.Get(dailyRequestsKey(time.Now())); v != nil {
+			todayReq = btoi(v)
+		}
 		if v := b.Get([]byte("cli")); v != nil {
 			cliReq = btoi(v)
 		}
@@ -292,7 +323,7 @@ func readBasicStats() (uint64, int, uint64, uint64, uint64, string, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, 0, 0, 0, 0, "", err
+		return 0, 0, 0, 0, 0, 0, "", err
 	}
 
 	// Backward compatibility for old DBs before unique counter existed.
@@ -309,7 +340,7 @@ func readBasicStats() (uint64, int, uint64, uint64, uint64, string, error) {
 	}
 
 	totalReq := cliReq + jsonReq + browserReq
-	return totalReq, int(uniqueIPs), cliReq, jsonReq, browserReq, statsSince, nil
+	return totalReq, todayReq, int(uniqueIPs), cliReq, jsonReq, browserReq, statsSince, nil
 }
 
 func isCLIUserAgent(userAgent string) bool {
@@ -357,22 +388,17 @@ func readGeoCacheFromTx(tx *bbolt.Tx, ip string) (persistedGeoEntry, bool) {
 }
 
 func clientIP(r *http.Request) string {
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		parts := strings.Split(xff, ",")
-		if len(parts) > 0 {
-			ip := stripPort(strings.TrimSpace(parts[0]))
-			if ip != "" {
-				return ip
+	peer := stripPort(strings.TrimSpace(r.RemoteAddr))
+	if addr, err := netip.ParseAddr(peer); err == nil && caddyProxy.contains(addr.Unmap()) {
+		// Caddy supplies one address, never a client-provided forwarding chain.
+		values := r.Header.Values("X-Forwarded-For")
+		if len(values) == 1 {
+			if forwarded, err := netip.ParseAddr(strings.TrimSpace(values[0])); err == nil && forwarded.Zone() == "" {
+				return forwarded.Unmap().String()
 			}
 		}
 	}
-	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
-		ip := stripPort(xri)
-		if ip != "" {
-			return ip
-		}
-	}
-	return stripPort(strings.TrimSpace(r.RemoteAddr))
+	return peer
 }
 
 func stripPort(v string) string {
@@ -493,6 +519,7 @@ const htmlTemplate = `
         <p class="usage">Plain text at <a href="/ip">/ip</a> &amp; JSON at <a href="/json">/json</a>. Use with curl, wget or HTTPie.</p>
         <div class="sep">---</div>
         <div class="line">Total requests: %d</div>
+        <div class="line">Requests today (UTC): %d</div>
         <div class="line">CLI requests: %d</div>
         <div class="line">JSON requests: %d</div>
         <div class="line">Browser requests: %d</div>

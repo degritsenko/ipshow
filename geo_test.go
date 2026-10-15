@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,6 +22,12 @@ func (f testTransport) RoundTrip(r *http.Request) (*http.Response, error) { retu
 func setupGeoTest(t *testing.T) {
 	t.Helper()
 	oldDB, oldGeo := db, geo
+	oldProxy := caddyProxy
+	caddyProxy = newProxyTrust()
+	caddyProxy.lookup = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	t.Cleanup(func() { caddyProxy = oldProxy })
 	var err error
 	db, err = bbolt.Open(filepath.Join(t.TempDir(), "stats.db"), 0600, nil)
 	if err != nil {
@@ -130,7 +138,7 @@ func TestIPEndpoint(t *testing.T) {
 			}
 		}
 	}
-	total, _, cli, jsonCount, browser, _, err := readBasicStats()
+	total, _, _, cli, jsonCount, browser, _, err := readBasicStats()
 	if err != nil || total != 6 || cli != 6 || jsonCount != 0 || browser != 0 {
 		t.Fatalf("unexpected counts: total=%d cli=%d json=%d browser=%d err=%v", total, cli, jsonCount, browser, err)
 	}

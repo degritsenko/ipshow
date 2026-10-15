@@ -16,6 +16,8 @@ docker compose up -d --build
 Before start, set your own domain in Caddyfile.
 HTTP behavior in Caddyfile: browsers are redirected from `80` to `443`, CLI requests are served on `80` without redirect.
 
+Forwarded IP headers are accepted only from the `caddy` service resolved through Docker DNS (cached for 30 seconds). Keep the application port unpublished. When running directly without Caddy, the connection's peer address is used.
+
 Containers:
 - `ipshow`
 - `ipshow-caddy`
