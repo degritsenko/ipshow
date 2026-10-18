@@ -1,4 +1,4 @@
-http://gritsenko.me {
+http://{$DOMAIN} {
     @browser header_regexp User-Agent (?i)(mozilla|chrome|safari|firefox|edg)
     handle @browser {
         redir https://{host}{uri} 308
@@ -12,7 +12,7 @@ http://gritsenko.me {
     }
 }
 
-https://gritsenko.me {
+https://{$DOMAIN} {
     reverse_proxy ipshow:8080 {
         header_up X-Forwarded-For {remote_host}
         header_up -X-Real-IP

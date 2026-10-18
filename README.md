@@ -1,23 +1,41 @@
 # ipshow
 
-Simple service that returns your public IP address, keeps visit stats, and shows country/city info in web view.
-
-CLI tools (`curl`, `wget`, `httpie`) get raw IP only.
-
-Use `curl http://your-domain/ip` to always get plain-text IP, regardless of User-Agent.
-
-Use `curl http://your-domain/json` for JSON with IP, city, region, country code, coordinates, ASN/organization, postal code, and timezone. Unavailable fields are empty strings.
+A small Go service that returns your public IP. The browser view shows country/city, CLI examples, and basic request counters.
 
 ## Run with Docker Compose
+
+Set your domain in `docker-compose.yaml` under `caddy.environment.DOMAIN`, without a scheme or path:
+
+```yaml
+environment:
+  DOMAIN: your-domain.com
+```
+
+Point the domain's DNS records to your server and make ports 80 and 443 reachable. Caddy reads `DOMAIN` from its environment and manages HTTPS certificates.
+
 ```bash
 docker compose up -d --build
 ```
 
-Before start, set your own domain in Caddyfile.
-HTTP behavior in Caddyfile: browsers are redirected from `80` to `443`, CLI requests are served on `80` without redirect.
+To update:
 
-Forwarded IP headers are accepted only from the `caddy` service resolved through Docker DNS (cached for 30 seconds, with an early recheck for an unfamiliar peer, limited to once per second). Keep the application port unpublished. When running directly without Caddy, the connection's peer address is used.
+```bash
+git pull
+docker compose up -d --build
+```
 
-Containers:
-- `ipshow`
-- `ipshow-caddy`
+## Usage
+
+```bash
+curl your-domain.com        # Plain-text IP
+curl your-domain.com/ip     # Plain-text IP, regardless of User-Agent
+curl your-domain.com/json   # IP and location as JSON
+```
+
+JSON fields: `ip`, `city`, `region`, `country` (country code), `loc` (latitude,longitude), `org` (ASN and organization), `postal`, and `timezone`. Unavailable fields are empty strings.
+
+Browser requests over HTTP redirect to HTTPS; CLI requests are served over HTTP without a redirect. HTTPS works for both.
+
+Containers: `ipshow` and `ipshow-caddy`. Keep the application port unpublished: forwarded IP headers are trusted only from the `caddy` service resolved through Docker DNS.
+
+Go source and tests are in `app/`. Run tests with `go test ./...`.
