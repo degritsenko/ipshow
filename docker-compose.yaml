@@ -10,7 +10,7 @@ services:
     image: caddy:latest
     container_name: ipshow-caddy
     environment:
-      DOMAIN: gritsenko.me
+      DOMAIN: example.com
     ports:
       - "80:80"
       - "443:443"

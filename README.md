@@ -8,7 +8,7 @@ Set your domain in `docker-compose.yaml` under `caddy.environment.DOMAIN`, witho
 
 ```yaml
 environment:
-  DOMAIN: your-domain.com
+  DOMAIN: example.com
 ```
 
 Point the domain's DNS records to your server and make ports 80 and 443 reachable. Caddy reads `DOMAIN` from its environment and manages HTTPS certificates.
@@ -27,9 +27,9 @@ docker compose up -d --build
 ## Usage
 
 ```bash
-curl your-domain.com        # Plain-text IP
-curl your-domain.com/ip     # Plain-text IP, regardless of User-Agent
-curl your-domain.com/json   # IP and location as JSON
+curl example.com        # Plain-text IP
+curl example.com/ip     # Plain-text IP, regardless of User-Agent
+curl example.com/json   # IP and location as JSON
 ```
 
 JSON fields: `ip`, `city`, `region`, `country` (country code), `loc` (latitude,longitude), `org` (ASN and organization), `postal`, and `timezone`. Unavailable fields are empty strings.
