@@ -24,11 +24,6 @@ type basicStats struct {
 	StatsSince      string
 }
 
-type ipStatLine struct {
-	ip    string
-	count uint64
-}
-
 func itob(v uint64) []byte {
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, v)
@@ -54,19 +49,9 @@ func dailyRequestsKey(now time.Time) []byte {
 	return []byte("daily:" + now.UTC().Format("2006-01-02"))
 }
 
-func recordRequest(ip string, kind requestKind, now time.Time) error {
+func recordRequest(kind requestKind, now time.Time) error {
 	return db.Update(func(tx *bbolt.Tx) error {
-		ips := tx.Bucket([]byte(ipStatsBucketName))
 		requests := tx.Bucket([]byte(reqStatsBucketName))
-		ipKey := []byte(ip)
-		if ips.Get(ipKey) == nil {
-			if err := incrementCounter(requests, []byte("unique_ips")); err != nil {
-				return err
-			}
-		}
-		if err := incrementCounter(ips, ipKey); err != nil {
-			return err
-		}
 		if err := incrementCounter(requests, []byte(kind)); err != nil {
 			return err
 		}
@@ -99,15 +84,4 @@ func readBasicStatsAt(now time.Time) (basicStats, error) {
 		return nil
 	})
 	return stats, err
-}
-
-func loadStatsLines() ([]ipStatLine, error) {
-	lines := make([]ipStatLine, 0, 256)
-	err := db.View(func(tx *bbolt.Tx) error {
-		return tx.Bucket([]byte(ipStatsBucketName)).ForEach(func(k, v []byte) error {
-			lines = append(lines, ipStatLine{ip: string(k), count: btoi(v)})
-			return nil
-		})
-	})
-	return lines, err
 }

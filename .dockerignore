@@ -1,0 +1,7 @@
+.git
+.DS_Store
+data
+ipshow
+server
+*.test
+coverage.out

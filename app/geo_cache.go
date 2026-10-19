@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"strings"
@@ -29,7 +30,7 @@ func (e persistedGeoEntry) data() geoData {
 	return geoData{Country: e.Country, Code: e.Code, City: e.City, ASN: e.ASN, ASNName: e.ASNName}
 }
 
-func lookupGeoDetailsCached(ip string, requireDetails bool) geoData {
+func lookupGeoDetailsCached(ctx context.Context, ip string) geoData {
 	var e persistedGeoEntry
 	found := false
 	if err := db.View(func(tx *bbolt.Tx) error {
@@ -38,10 +39,13 @@ func lookupGeoDetailsCached(ip string, requireDetails bool) geoData {
 	}); err != nil {
 		log.Printf("geo cache read error: %v", err)
 	}
-	if found && e.usable(time.Now(), requireDetails) {
+	if found && e.usable(time.Now()) {
 		return e.data()
 	}
-	d := geo.Lookup(ip)
+	d := geo.Lookup(ctx, ip)
+	if ctx.Err() != nil {
+		return e.data()
+	}
 	updated, err := saveGeoLookup(ip, d, time.Now())
 	if err != nil {
 		log.Printf("geo cache write error: %v", err)
@@ -53,14 +57,14 @@ func lookupGeoDetailsCached(ip string, requireDetails bool) geoData {
 	return updated.data()
 }
 
-func (e persistedGeoEntry) usable(now time.Time, requireDetails bool) bool {
+func (e persistedGeoEntry) usable(now time.Time) bool {
 	if now.Before(time.Unix(e.RetryAfter, 0)) {
 		return true
 	}
 	ttl := geoFailureCacheTTL
 	if e.Success {
 		ttl = geoSuccessCacheTTL
-		if requireDetails && e.Details == nil {
+		if e.Details == nil {
 			return false
 		}
 	}

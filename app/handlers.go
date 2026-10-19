@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	ip := clientIP(r)
 	kind := browserRequest
 	if r.URL.Path == "/ip" || isCLIUserAgent(r.UserAgent()) {
@@ -22,13 +24,13 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/json" {
 		kind = jsonRequest
 	}
-	if err := recordRequest(ip, kind, time.Now()); err != nil {
+	if err := recordRequest(kind, time.Now()); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		log.Printf("db update error: %v", err)
 		return
 	}
 	if kind == jsonRequest {
-		serveJSON(w, ip)
+		serveJSON(r.Context(), w, ip)
 		return
 	}
 	if kind == cliRequest {
@@ -36,7 +38,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, ip)
 		return
 	}
-	location := lookupGeoDetailsCached(ip, true)
+	location := lookupGeoDetailsCached(r.Context(), ip)
 	stats, err := readBasicStats()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -79,8 +81,8 @@ func makeIPInfo(ip string, d geoData) ipInfo {
 	}
 }
 
-func serveJSON(w http.ResponseWriter, ip string) {
-	result := makeIPInfo(ip, lookupGeoDetailsCached(ip, true))
+func serveJSON(ctx context.Context, w http.ResponseWriter, ip string) {
+	result := makeIPInfo(ip, lookupGeoDetailsCached(ctx, ip))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

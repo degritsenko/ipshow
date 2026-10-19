@@ -72,7 +72,7 @@ func TestDailyRequestsAcrossUTCMidnightAndReopen(t *testing.T) {
 		if request.json {
 			kind = jsonRequest
 		}
-		if err := recordRequest("127.0.0.1", kind, request.at); err != nil {
+		if err := recordRequest(kind, request.at); err != nil {
 			t.Fatal(err)
 		}
 	}
