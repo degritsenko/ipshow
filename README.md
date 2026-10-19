@@ -6,7 +6,7 @@ Try it live at [gritsenko.me](https://gritsenko.me).
 
 ## Run with Docker Compose
 
-Set your domain in `docker-compose.yaml` under `caddy.environment.DOMAIN`, without a scheme or path:
+Set your domain in `docker-compose.yaml` 
 
 ```yaml
 environment:
