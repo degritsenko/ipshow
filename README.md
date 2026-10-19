@@ -2,6 +2,8 @@
 
 A small Go service that returns your public IP. The browser view shows country/city, CLI examples, and basic request counters.
 
+Try it live at [gritsenko.me](https://gritsenko.me).
+
 ## Run with Docker Compose
 
 Set your domain in `docker-compose.yaml` under `caddy.environment.DOMAIN`, without a scheme or path:
